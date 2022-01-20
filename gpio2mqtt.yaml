@@ -1,0 +1,12 @@
+host: 192.168.0.2
+covers:
+    -   name: Rolladen über Bett
+        chip: /dev/gpiochip0
+        up_pin: 2
+        down_pin: 3
+        stop_pin: 4
+
+        device:
+            identifier: velux_integra_1
+            manufacturer: VELUX
+            model: INTEGRA

@@ -1,0 +1,10 @@
+[Unit]
+Description=GPIO to MQTT bridge
+After=network-online.target
+Requires=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/gpio2mqtt
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,154 @@
+    fn update_state(
+        &self,
+        f: impl FnOnce(CoverState) -> CoverState,
+    ) -> Result<(), watch::error::SendError<CoverState>> {
+        let old_state = *self.state.borrow();
+        self.state.send(f(old_state))
+    }
+
+    fn position_from_elapsed(&self, elapsed: Duration) -> Position {
+        let ratio = elapsed.div_duration_f32(self.state.borrow().calibration_time);
+
+        (ratio * 100.0).round() as Position
+    }
+
+    pub fn state(&self) -> CoverState {
+        *self.state.borrow()
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<CoverState> {
+        self.state.subscribe()
+    }
+
+    pub async fn set_position(&self, pos: Position) -> Result<(), gpio_cdev::Error> {
+        let ctok = CancellationToken::new();
+
+        if let Some(t) = self.cancel_tok.lock().await.replace(ctok.clone()) {
+            t.cancel();
+        }
+
+        let cur_pos = self.state.borrow().position;
+        let offset = pos as i32 - cur_pos as i32;
+
+        let (move_pin, moving) = match offset.cmp(&0) {
+            Ordering::Equal => return Ok(()),
+            Ordering::Less => (self.gpio_down.clone(), CoverMovement::Down),
+            Ordering::Greater => (self.gpio_up.clone(), CoverMovement::Up),
+        };
+
+        let stop_pin = self.gpio_stop.clone();
+        let calibration_time = self.state.borrow().calibration_time;
+        let move_duration = (calibration_time / 100) * (offset.abs() as u32);
+
+        let move_handle = move_pin.request(LineRequestFlags::OUTPUT, 0, "cover-move")?;
+        gpio_sim_short_press(&move_handle)?;
+
+        self.update_state(|state| CoverState { moving, ..state })
+            .unwrap();
+
+        let start_time = Instant::now();
+        let end_time = start_time + move_duration;
+        let period = Duration::from_millis(300);
+
+        let upd = async move {
+            let mut interval = tokio::time::interval(period);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Burst);
+
+            while Instant::now() + period < end_time {
+                interval.tick().await;
+
+                self.update_state(|state| CoverState {
+                    position: self.position_from_elapsed(Instant::now().duration_since(start_time)),
+                    ..state
+                })
+                    .unwrap();
+            }
+
+            tokio::time::sleep_until(end_time.into()).await;
+        };
+
+        select! {
+            _ = upd => {
+                self.update_state(|state| CoverState {
+                    position: pos,
+                    moving: CoverMovement::Stopped,
+                    ..state
+                }).unwrap();
+            },
+            _ = ctok.cancelled() => {
+                let elapsed = Instant::now()
+                    .duration_since(start_time);
+
+                self.update_state(|state| CoverState {
+                    position: self.position_from_elapsed(elapsed),
+                    moving: CoverMovement::Stopped,
+                    ..state
+                }).unwrap();
+            },
+        }
+
+        let stop_handle = stop_pin.request(LineRequestFlags::OUTPUT, 0, "cover-stop")?;
+        gpio_sim_short_press(&stop_handle)?;
+
+        let _ = self.cancel_tok.lock().await.take();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use tokio::join;
+
+        use super::*;
+
+        #[test]
+        fn it_works() {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&CoverState {
+                    position: 0,
+                    moving: CoverMovement::Stopped,
+                    calibration: false,
+                    calibration_time: Duration::from_secs(0),
+                })
+                .unwrap()
+            );
+        }
+
+        #[tokio::test]
+        async fn aaaa() {
+            let mut chip = Chip::new("/dev/gpiochip0").unwrap();
+            let l1 = chip.get_line(9).unwrap();
+            let l2 = chip.get_line(10).unwrap();
+            let l3 = chip.get_line(11).unwrap();
+
+            let (tx, mut rx) = watch::channel(CoverState {
+                position: 0,
+                moving: CoverMovement::Stopped,
+                calibration: false,
+                calibration_time: Duration::from_secs_f32(5.0),
+            });
+
+            let c = Cover {
+                gpio_up: l1,
+                gpio_down: l2,
+                gpio_stop: l3,
+                state: tx,
+                cancel_tok: Mutex::new(None),
+            };
+
+            let f2 = async move {
+                while let Ok(_) = rx.changed().await {
+                    let state = rx.borrow();
+                    println!("{:#?}", state);
+
+                    if let CoverMovement::Stopped = state.moving {
+                        break;
+                    }
+                }
+            };
+
+            join!(c.move_up(), f2);
+
+            panic!();
+        }
+    }
