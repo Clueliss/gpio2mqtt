@@ -2,11 +2,13 @@ mod config;
 mod covers;
 mod mqtt;
 
-use std::{collections::HashMap, fs::File};
+use std::{collections::HashMap, fs::File, time::Duration};
 
 use covers::CoverCommand;
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Publish};
+use rumqttc::{AsyncClient, ConnectionError, Event, Incoming, MqttOptions, Publish};
 use tokio::select;
+
+use crate::mqtt::ConfigurationPayload;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -32,21 +34,24 @@ async fn main() {
         })
         .collect();
 
-    let payloads = config
+    let payloads: Vec<ConfigurationPayload> = config
         .covers
         .into_iter()
-        .map(mqtt::ConfigurationPayload::from);
+        .map(mqtt::ConfigurationPayload::from)
+        .collect();
 
     let opts = MqttOptions::new("gpio2mqtt_bridge", config.host, config.port);
     let (client, mut eventloop) = AsyncClient::new(opts, 10);
-
-    mqtt::announce_online(&client).await.unwrap();
-    mqtt::register_covers(&client, payloads).await.unwrap();
 
     loop {
         select! {
             event = eventloop.poll() => {
                 match event {
+                    Ok(Event::Incoming(Incoming::ConnAck(_))) => {
+                        println!("Ok(Incoming(ConnAck(_))): announcing capabilities");
+                        mqtt::announce_online(&client).await.unwrap();
+                        mqtt::register_covers(&client, &payloads).await.unwrap();
+                    },
                     Ok(Event::Incoming(Incoming::Publish(Publish { topic, payload, .. }))) => {
                         println!("Ok(Incoming(Publish {{ topic: {topic}, payload: {payload:?}, .. }}))");
                         if let Some(cover) = covers.get(&topic) {
@@ -68,7 +73,11 @@ async fn main() {
                         } else {
                             eprintln!("Err: unknown cover at {topic}");
                         }
-                    }
+                    },
+                    Err(ConnectionError::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                        eprintln!("Err(Io({e:?})): retrying in 10s");
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                    },
                     other => println!("{other:?}"),
                 }
             },

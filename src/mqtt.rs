@@ -9,7 +9,7 @@ const MQTT_AVAIL_TOPIC: &str = "gpio2mqtt/bridge/state";
 
 pub async fn register_covers(
     client: &AsyncClient,
-    payloads: impl Iterator<Item = ConfigurationPayload>,
+    payloads: &[ConfigurationPayload],
 ) -> Result<(), ClientError> {
     for payload in payloads {
         client
@@ -20,7 +20,7 @@ pub async fn register_covers(
                 ),
                 QoS::AtLeastOnce,
                 false,
-                serde_json::to_vec(&payload).unwrap(),
+                serde_json::to_vec(payload).unwrap(),
             )
             .await?;
 
