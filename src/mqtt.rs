@@ -19,7 +19,7 @@ pub async fn register_covers(
                     payload.unique_id
                 ),
                 QoS::AtLeastOnce,
-                false,
+                true,
                 serde_json::to_vec(payload).unwrap(),
             )
             .await?;

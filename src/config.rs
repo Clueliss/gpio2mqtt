@@ -18,6 +18,8 @@ pub struct Config {
 
     #[serde(default = "default_port")]
     pub port: u16,
+
+    pub global_tx_timeout_ms: u64,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +40,7 @@ pub struct Device {
     pub identifier: Identifier,
     pub manufacturer: String,
     pub model: String,
+    pub tx_timeout_ms: u64,
 }
 
 impl<'de> Deserialize<'de> for Identifier {

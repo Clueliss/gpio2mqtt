@@ -7,18 +7,19 @@ TARGET=arm-unknown-linux-gnueabihf # Pi 0/1
 case $1 in
   deploy)
     cross build --release --target $TARGET;
-    scp ./target/$TARGET/debug/gpio2mqtt pi@$PI_IP:/home/pi;
+
+    scp ./target/$TARGET/release/gpio2mqtt pi@$PI_IP:/home/pi;
 
     # copy binary to /usr/local/bin
-    ssh pi@$PI_IP 'sudo install /home/pi/gpio2mqtt /usr/local/bin'
+    ssh pi@$PI_IP 'sudo systemctl stop gpio2mqtt && sudo install /home/pi/gpio2mqtt /usr/local/bin && sudo systemctl start gpio2mqtt'
 
-    # copy config to /etc
-    scp ./gpio2mqtt.yaml pi@$PI_IP:/home/pi/gpio2mqtt.yaml
-    ssh pi@$PI_IP 'sudo install /home/pi/gpio2mqtt.yaml /etc'
+    ## copy config to /etc
+    #scp ./gpio2mqtt.yaml pi@$PI_IP:/home/pi/gpio2mqtt.yaml
+    #ssh pi@$PI_IP 'sudo install /home/pi/gpio2mqtt.yaml /etc'
 
     # copy service to /etc/systemd/system
-    scp ./gpio2mqtt.service pi@$PI_IP:/home/pi/gpio2mqtt.service
-    ssh pi@$PI_IP 'sudo install /home/pi/gpio2mqtt.service /etc/systemd/system'
+    #scp ./gpio2mqtt.service pi@$PI_IP:/home/pi/gpio2mqtt.service
+    #ssh pi@$PI_IP 'sudo install /home/pi/gpio2mqtt.service /etc/systemd/system'
     ;;
   test)
     cross test --target=$TARGET --no-run --all

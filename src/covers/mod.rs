@@ -2,6 +2,7 @@ pub mod stateless_gpio;
 
 use std::str::FromStr;
 
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum CoverCommand {
     Open,
     Close,
