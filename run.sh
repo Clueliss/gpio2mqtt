@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 PI_IP=192.168.0.151
 TARGET=arm-unknown-linux-gnueabihf # Pi 0/1
 
