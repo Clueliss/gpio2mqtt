@@ -3,7 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpio_cdev::{Chip, Line, LineHandle, LineRequestFlags};
+use crate::config::Identifier;
+use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
 use tokio::{select, sync::Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -17,9 +18,9 @@ async fn gpio_sim_short_press(handle: &LineHandle) -> Result<(), gpio_cdev::Erro
 }
 
 pub struct Options {
-    pub up: Line,
-    pub down: Line,
-    pub stop: Line,
+    pub up: LineHandle,
+    pub down: LineHandle,
+    pub stop: LineHandle,
     pub tx_timeout: Duration,
 }
 
@@ -30,11 +31,24 @@ impl Options {
         down_offset: u32,
         stop_offset: u32,
         tx_timeout: Duration,
+        identifier: &Identifier,
     ) -> Result<Self, gpio_cdev::Error> {
         let mut chip = Chip::new(chip_path)?;
-        let up = chip.get_line(up_offset)?;
-        let down = chip.get_line(down_offset)?;
-        let stop = chip.get_line(stop_offset)?;
+        let up = chip.get_line(up_offset)?.request(
+            LineRequestFlags::OUTPUT,
+            0,
+            &format!("gpio2mqtt_{}_up", &identifier.0),
+        )?;
+        let down = chip.get_line(down_offset)?.request(
+            LineRequestFlags::OUTPUT,
+            0,
+            &format!("gpio2mqtt_{}_down", &identifier.0),
+        )?;
+        let stop = chip.get_line(stop_offset)?.request(
+            LineRequestFlags::OUTPUT,
+            0,
+            &format!("gpio2mqtt_{}_stop", &identifier.0),
+        )?;
 
         Ok(Self {
             up,
@@ -91,10 +105,7 @@ impl Cover {
                     CoverCommand::Stop => &self.options.stop,
                 };
 
-                let h = line
-                    .request(LineRequestFlags::OUTPUT, 0, &format!("cover {action:?}"))?;
-
-                gpio_sim_short_press(&h).await?;
+                gpio_sim_short_press(line).await?;
                 *d = Instant::now() + self.options.tx_timeout;
             }
         }

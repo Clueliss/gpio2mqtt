@@ -30,6 +30,7 @@ async fn main() {
                 cover_conf.down_pin,
                 cover_conf.stop_pin,
                 Duration::from_millis(cover_conf.device.tx_timeout_ms),
+                &cover_conf.device.identifier,
             )
             .unwrap();
 
@@ -102,7 +103,7 @@ async fn main() {
                         eprintln!("Err(Io({e:?})): retrying in 10s");
                         tokio::time::sleep(Duration::from_secs(10)).await;
                     },
-                    other => println!("igoring: {other:?}"),
+                    other => println!("Ignoring: {other:?}"),
                 }
             },
             _ = tokio::signal::ctrl_c() => {
