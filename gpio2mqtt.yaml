@@ -1,12 +1,23 @@
 host: 192.168.0.2
+global_tx_timeout_ms: 1000
 covers:
     -   name: Rolladen über Bett
         chip: /dev/gpiochip0
         up_pin: 2
-        down_pin: 3
-        stop_pin: 4
-
+        down_pin: 4
+        stop_pin: 3
         device:
             identifier: velux_integra_1
             manufacturer: VELUX
             model: INTEGRA
+            tx_timeout_ms: 300
+    -   name: Rolladen Küche
+        chip: /dev/gpiochip0
+        up_pin: 8
+        down_pin: 7
+        stop_pin: 25
+        device:
+            identifier: velux_integra_2
+            manufacturer: VELUX
+            model: INTEGRA
+            tx_timeout_ms: 300
