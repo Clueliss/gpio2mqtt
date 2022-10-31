@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-PI_IP=192.168.0.151
+PI_IP=192.168.0.22
 TARGET=arm-unknown-linux-gnueabihf # Pi 0/1
 
 # build binary
 case $1 in
   deploy)
-    cross build --release --target $TARGET;
+    cross build --release --target $TARGET
 
-    scp ./target/$TARGET/release/gpio2mqtt pi@$PI_IP:/home/pi;
+    scp ./target/$TARGET/release/gpio2mqtt pi@$PI_IP:/home/pi
 
     # copy binary to /usr/local/bin
     ssh pi@$PI_IP 'sudo systemctl stop gpio2mqtt && sudo install /home/pi/gpio2mqtt /usr/local/bin && sudo systemctl start gpio2mqtt'
@@ -34,7 +34,9 @@ case $1 in
 
     scp ".$exec" pi@$PI_IP:/home/pi/gpio2mqtt;
     ;;
+  run)
+    cross build --target $TARGET
+    ssh pi@$PI_IP rm /home/pi/gpio2mqtt
+    scp ./target/$TARGET/debug/gpio2mqtt pi@$PI_IP:/home/pi
+    ;;
 esac
-
-
-

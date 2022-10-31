@@ -9,6 +9,8 @@ const MQTT_AVAIL_TOPIC: &str = "gpio2mqtt/bridge/state";
 
 pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayload]) -> Result<(), ClientError> {
     for payload in payloads {
+        println!("MQTT publish: topic '{}' payload '{}'", payload.config_topic, serde_json::to_string(payload).unwrap());
+
         client
             .publish(
                 payload.config_topic.clone(),
@@ -19,7 +21,7 @@ pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayloa
             .await?;
 
         if let DeviceSpecificMqttConfig::Cover { command_topic, .. } = &payload.specific {
-            client.subscribe(command_topic, QoS::AtLeastOnce).await?;
+            client.subscribe(dbg!(command_topic), QoS::AtLeastOnce).await?;
         }
     }
 
@@ -37,6 +39,8 @@ pub async fn announce_offline(client: &AsyncClient) -> Result<(), ClientError> {
 }
 
 pub async fn publish_state(client: &AsyncClient, topic: &str, payload: &impl Serialize) -> Result<(), ClientError> {
+    println!("MQTT publish topic: '{}' payload: '{}'", topic, serde_json::to_string(payload).unwrap());
+
     client
         .publish(topic, QoS::AtLeastOnce, true, serde_json::to_vec(payload).unwrap())
         .await
