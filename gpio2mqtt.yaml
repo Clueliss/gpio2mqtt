@@ -1,4 +1,4 @@
-host: 192.168.0.2
+host: 192.168.0.20
 global_tx_timeout_ms: 1000
 covers:
     -   name: Rolladen über Bett
@@ -21,3 +21,10 @@ covers:
             manufacturer: VELUX
             model: INTEGRA
             tx_timeout_ms: 300
+sunspec_devices:
+    -   name: Varta Element
+        host: 192.168.0.52
+        device:
+            identifier: varta_element_1
+            manufacturer: Varta
+            model: Element

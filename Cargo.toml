@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 gpio-cdev = "0.5.1"
-serde = { version = "1.0.133", features = ["derive"] }
+serde = { version = "^1.0.133", features = ["derive"] }
 serde_json = "1.0.74"
 serde_yaml = "0.8.23"
 tokio = { version = "1.15.0", features = ["macros", "time", "rt", "signal"] }
@@ -15,3 +15,5 @@ tokio-util = "0.6.9"
 rumqttc = "0.10.0"
 regex = "1.5.4"
 lazy_static = "1.4.0"
+modbus = { git = "https://github.com/Clueliss/modbus", rev = "142928f" }
+chrono = "0.4.22"

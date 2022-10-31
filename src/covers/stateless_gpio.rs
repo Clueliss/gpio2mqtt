@@ -1,14 +1,11 @@
+use crate::{config::Identifier, covers::CoverCommand};
+use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
 use std::{
     path::Path,
     time::{Duration, Instant},
 };
-
-use crate::config::Identifier;
-use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
 use tokio::{select, sync::Mutex};
 use tokio_util::sync::CancellationToken;
-
-use super::CoverCommand;
 
 async fn gpio_sim_short_press(handle: &LineHandle) -> Result<(), gpio_cdev::Error> {
     handle.set_value(1)?;
@@ -50,12 +47,7 @@ impl Options {
             &format!("gpio2mqtt_{}_stop", &identifier.0),
         )?;
 
-        Ok(Self {
-            up,
-            down,
-            stop,
-            tx_timeout,
-        })
+        Ok(Self { up, down, stop, tx_timeout })
     }
 }
 
@@ -67,11 +59,7 @@ pub struct Cover {
 
 impl Cover {
     pub fn new(options: Options) -> Self {
-        Self {
-            options,
-            timeout: Mutex::new(Instant::now()),
-            state: Mutex::new(None),
-        }
+        Self { options, timeout: Mutex::new(Instant::now()), state: Mutex::new(None) }
     }
 
     pub async fn issue_command(&self, action: CoverCommand) -> Result<(), gpio_cdev::Error> {
@@ -81,11 +69,11 @@ impl Cover {
             match s.take() {
                 Some((a, cancel)) if a != action => {
                     cancel.cancel();
-                }
+                },
                 Some(_) => {
                     return Ok(());
-                }
-                None => {}
+                },
+                None => {},
             }
 
             let ctok = CancellationToken::new();

@@ -1,10 +1,12 @@
 mod config;
 mod covers;
 mod mqtt;
+mod sunspec;
 
 use std::{
     collections::HashMap,
     fs::File,
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -13,12 +15,9 @@ use covers::CoverCommand;
 use rumqttc::{AsyncClient, ConnectionError, Event, Incoming, MqttOptions, Publish};
 use tokio::{select, sync::Mutex};
 
-use crate::mqtt::ConfigurationPayload;
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let config: config::Config =
-        serde_yaml::from_reader(File::open("/etc/gpio2mqtt.yaml").unwrap()).unwrap();
+    let config: config::Config = serde_yaml::from_reader(File::open("gpio2mqtt.yaml").unwrap()).unwrap();
 
     let covers: HashMap<_, _> = config
         .covers
@@ -29,7 +28,7 @@ async fn main() {
                 cover_conf.up_pin,
                 cover_conf.down_pin,
                 cover_conf.stop_pin,
-                Duration::from_millis(cover_conf.device.tx_timeout_ms),
+                Duration::from_millis(cover_conf.device.tx_timeout_ms.unwrap_or_default()),
                 &cover_conf.device.identifier,
             )
             .unwrap();
@@ -41,14 +40,33 @@ async fn main() {
         })
         .collect();
 
-    let payloads: Vec<ConfigurationPayload> = config
+    let mut sunspec_devices = {
+        let mut tmp: HashMap<_, _> = Default::default();
+
+        for sunspec_conf in &config.sunspec_devices {
+            tmp.insert(
+                mqtt::state_topic_for_dev_id(&sunspec_conf.device.identifier),
+                sunspec::varta::ElementSunspecClient::new(SocketAddr::new(
+                    sunspec_conf.host.parse().unwrap(),
+                    sunspec_conf.port,
+                )),
+            );
+        }
+
+        tmp
+    };
+
+    let payloads: Vec<mqtt::MqttConfigPayload> = config
         .covers
         .into_iter()
-        .map(mqtt::ConfigurationPayload::from)
+        .map(Into::into)
+        .chain(config.sunspec_devices.into_iter().flat_map(Vec::<_>::from))
         .collect();
 
-    let opts = MqttOptions::new("gpio2mqtt_bridge", config.host, config.port);
+    let opts = MqttOptions::new("gpio2mqtt_bridge2", config.host, config.port);
     let (client, mut eventloop) = AsyncClient::new(opts, 10);
+
+    let mut sensor_timer = tokio::time::interval(Duration::from_secs(10));
 
     let transmission_timeout = Arc::new(Mutex::new(Instant::now()));
 
@@ -59,7 +77,7 @@ async fn main() {
                     Ok(Event::Incoming(Incoming::ConnAck(_))) => {
                         println!("Ok(Incoming(ConnAck(_))): announcing capabilities");
                         mqtt::announce_online(&client).await.unwrap();
-                        mqtt::register_covers(&client, &payloads).await.unwrap();
+                        mqtt::register_devices(&client, &payloads).await.unwrap();
                     },
                     Ok(Event::Incoming(Incoming::Publish(Publish { topic, payload, .. }))) => {
                         println!("Ok(Incoming(Publish {{ topic: {topic}, payload: {payload:?}, .. }}))");
@@ -96,16 +114,24 @@ async fn main() {
                                 eprintln!("Err: invalid payload {payload:?}");
                             }
                         } else {
-                            eprintln!("Err: unknown cover at {topic}");
+                            eprintln!("Err: unknown device at {topic}");
                         }
                     },
                     Err(ConnectionError::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
                         eprintln!("Err(Io({e:?})): retrying in 10s");
                         tokio::time::sleep(Duration::from_secs(10)).await;
                     },
-                    other => println!("Ignoring: {other:?}"),
+                    _ => (),
                 }
             },
+            _ = sensor_timer.tick() => {
+                for (topic, sunspec) in &mut sunspec_devices {
+                    match sunspec.measure().await {
+                        Ok(measurements) => mqtt::publish_state(&client, topic, &measurements).await.unwrap(),
+                        Err(e) => eprintln!("Error: Unable to read from sunspec modbus: {e}"),
+                    }
+                }
+            }
             _ = tokio::signal::ctrl_c() => {
                 let _ = mqtt::announce_offline(&client).await;
                 return;
