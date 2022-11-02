@@ -1,6 +1,7 @@
 pub mod stateless_gpio;
 
 use std::str::FromStr;
+use thiserror::Error;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum CoverCommand {
@@ -9,6 +10,8 @@ pub enum CoverCommand {
     Stop,
 }
 
+#[derive(Error, Debug)]
+#[error("invalid cover command")]
 pub struct CoverCommandParseError;
 
 impl FromStr for CoverCommand {

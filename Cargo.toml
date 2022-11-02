@@ -17,3 +17,5 @@ regex = "1.5.4"
 lazy_static = "1.4.0"
 modbus = { git = "https://github.com/Clueliss/modbus", rev = "142928f" }
 chrono = "0.4.22"
+anyhow = "1.0.66"
+thiserror = "1.0.37"

@@ -15,8 +15,8 @@ const fn default_sunspec_port() -> u16 {
 
 #[derive(Deserialize)]
 pub struct Config {
-    pub covers: Vec<CoverConfig>,
-    pub sunspec_devices: Vec<SunspecConfig>,
+    pub covers: Option<Vec<CoverConfig>>,
+    pub sunspec_devices: Option<Vec<SunspecConfig>>,
     pub host: String,
 
     #[serde(default = "default_mqtt_port")]
