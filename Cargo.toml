@@ -9,13 +9,13 @@ edition = "2021"
 gpio-cdev = "0.5.1"
 serde = { version = "^1.0.133", features = ["derive"] }
 serde_json = "1.0.74"
-serde_yaml = "0.8.23"
+serde_yaml = "0.9.14"
 tokio = { version = "1.15.0", features = ["macros", "time", "rt", "signal"] }
-tokio-util = "0.6.9"
-rumqttc = "0.10.0"
+tokio-util = "0.7.4"
 regex = "1.5.4"
 lazy_static = "1.4.0"
 modbus = { git = "https://github.com/Clueliss/modbus", rev = "142928f" }
 chrono = "0.4.22"
 anyhow = "1.0.66"
 thiserror = "1.0.37"
+paho-mqtt = { version = "0.11.1", default-features = false, features = ["bundled"] }

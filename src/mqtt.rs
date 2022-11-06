@@ -1,13 +1,23 @@
-use rumqttc::{AsyncClient, ClientError, QoS};
+use paho_mqtt::{AsyncClient, Message};
 use serde::Serialize;
 
-use crate::config;
+use crate::{
+    config,
+    sunspec::{
+        varta::{BatteryPower, GridPower, Measurements, State},
+        Percentage, WattHours, Watts,
+    },
+};
 
 const MQTT_BASE_TOPIC: &str = "gpio2mqtt";
 const MQTT_DISCOVERY_TOPIC: &str = "homeassistant";
 const MQTT_AVAIL_TOPIC: &str = "gpio2mqtt/bridge/state";
 
-pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayload]) -> Result<(), ClientError> {
+const QOS_AT_MOST_ONCE: i32 = paho_mqtt::QOS_0;
+const QOS_AT_LEAST_ONCE: i32 = paho_mqtt::QOS_1;
+const QOS_EXACTLY_ONCE: i32 = paho_mqtt::QOS_2;
+
+pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayload]) -> anyhow::Result<()> {
     for payload in payloads {
         println!(
             "MQTT publish: topic '{}' payload '{}'",
@@ -15,34 +25,45 @@ pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayloa
             serde_json::to_string(payload).unwrap()
         );
 
-        client
-            .publish(
-                payload.config_topic.clone(),
-                QoS::AtLeastOnce,
-                true,
-                serde_json::to_vec(payload).unwrap(),
-            )
-            .await?;
+        let c = client.clone();
+        let p = payload.clone();
+
+        c.publish(Message::new_retained(
+            &p.config_topic,
+            serde_json::to_vec(&p).unwrap(),
+            QOS_AT_LEAST_ONCE,
+        ))
+        .await?;
 
         if let DeviceSpecificMqttConfig::Cover { command_topic, .. } = &payload.specific {
-            client.subscribe(command_topic, QoS::AtLeastOnce).await?;
+            client.subscribe(command_topic, QOS_AT_LEAST_ONCE).await?;
         }
     }
 
     Ok(())
 }
 
-pub async fn announce_online(client: &AsyncClient) -> Result<(), ClientError> {
-    client.publish(MQTT_AVAIL_TOPIC, QoS::AtLeastOnce, true, "online").await
-}
-
-pub async fn announce_offline(client: &AsyncClient) -> Result<(), ClientError> {
+pub async fn announce_online(client: &AsyncClient) -> anyhow::Result<()> {
     client
-        .publish(MQTT_AVAIL_TOPIC, QoS::AtLeastOnce, true, "offline")
-        .await
+        .publish(Message::new_retained(
+            MQTT_AVAIL_TOPIC,
+            b"online".to_owned(),
+            QOS_AT_LEAST_ONCE,
+        ))
+        .await?;
+    Ok(())
 }
 
-pub async fn publish_state(client: &AsyncClient, topic: &str, payload: &impl Serialize) -> Result<(), ClientError> {
+pub fn offline_message() -> Message {
+    Message::new_retained(MQTT_AVAIL_TOPIC, "offline".to_owned(), QOS_AT_LEAST_ONCE)
+}
+
+pub async fn announce_offline(client: &AsyncClient) -> anyhow::Result<()> {
+    client.publish(offline_message()).await?;
+    Ok(())
+}
+
+pub async fn publish_state(client: &AsyncClient, topic: &str, payload: &impl Serialize) -> anyhow::Result<()> {
     println!(
         "MQTT publish topic: '{}' payload: '{}'",
         topic,
@@ -50,8 +71,14 @@ pub async fn publish_state(client: &AsyncClient, topic: &str, payload: &impl Ser
     );
 
     client
-        .publish(topic, QoS::AtLeastOnce, true, serde_json::to_vec(payload).unwrap())
-        .await
+        .publish(Message::new(
+            topic,
+            serde_json::to_vec(payload).unwrap(),
+            QOS_AT_LEAST_ONCE,
+        ))
+        .await?;
+
+    Ok(())
 }
 
 pub fn command_topic_for_dev_id(dev_id: &config::Identifier) -> String {
@@ -62,16 +89,12 @@ pub fn state_topic_for_dev_id(dev_id: &config::Identifier) -> String {
     format!("{MQTT_BASE_TOPIC}/{dev_id}/state", dev_id = dev_id.0)
 }
 
-pub fn subcomponent_state_topic(dev_id: &config::Identifier, subcomponent: &str) -> String {
-    format!("{MQTT_BASE_TOPIC}/{dev_id}/{subcomponent}/state", dev_id = dev_id.0)
-}
-
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct AvailabilityPayload {
     topic: String,
 }
 
-#[derive(Serialize, Debug, Default)]
+#[derive(Serialize, Debug, Default, Clone)]
 pub struct DevicePayload {
     name: String,
     identifiers: Vec<String>,
@@ -83,7 +106,7 @@ pub struct DevicePayload {
     sw_version: Option<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Copy, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum StateClass {
     Measurement,
@@ -91,7 +114,7 @@ pub enum StateClass {
     TotalIncreasing,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Copy, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceClass {
     ApparentPower,
@@ -133,6 +156,43 @@ pub enum DeviceClass {
 }
 
 #[derive(Serialize, Debug)]
+pub struct SunspecState {
+    state: State,
+    state_of_charge: Percentage,
+    total_charge_energy: WattHours,
+    battery_active_charge_power: Watts,
+    battery_active_discharge_power: Watts,
+    grid_backfeed_power: Watts,
+    grid_consumption_power: Watts,
+}
+
+impl From<Measurements> for SunspecState {
+    fn from(value: Measurements) -> Self {
+        Self {
+            state: value.state,
+            state_of_charge: value.state_of_charge,
+            total_charge_energy: value.total_charge_energy,
+            battery_active_charge_power: match value.active_battery_power {
+                Some(BatteryPower::Charge(w)) => w,
+                _ => 0,
+            },
+            battery_active_discharge_power: match value.active_battery_power {
+                Some(BatteryPower::Discharge(w)) => w,
+                _ => 0,
+            },
+            grid_backfeed_power: match value.grid_power {
+                Some(GridPower::Backfeed(w)) => w,
+                _ => 0,
+            },
+            grid_consumption_power: match value.grid_power {
+                Some(GridPower::Consumption(w)) => w,
+                _ => 0,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum DeviceSpecificMqttConfig {
     Cover {
@@ -151,7 +211,7 @@ pub enum DeviceSpecificMqttConfig {
     },
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct MqttConfigPayload {
     pub name: String,
     pub unique_id: String,
@@ -191,7 +251,7 @@ impl From<config::SunspecConfig> for Vec<MqttConfigPayload> {
 
         let state_topic = state_topic_for_dev_id(&dev_id);
 
-        let sensors = [
+        let sensors = vec![
             (
                 "state",
                 DeviceSpecificMqttConfig::Sensor {
@@ -203,23 +263,23 @@ impl From<config::SunspecConfig> for Vec<MqttConfigPayload> {
                 },
             ),
             (
-                "active_power",
+                "battery_active_charge_power",
                 DeviceSpecificMqttConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
                     state_class: StateClass::Measurement,
                     unit_of_measurement: Some("W".to_owned()),
-                    value_template: Some("{{ value_json.active_power }}".to_owned()),
+                    value_template: Some("{{ value_json.battery_active_charge_power }}".to_owned()),
                 },
             ),
             (
-                "apparent_power",
+                "battery_active_discharge_power",
                 DeviceSpecificMqttConfig::Sensor {
                     state_topic: state_topic.clone(),
-                    device_class: Some(DeviceClass::ApparentPower),
+                    device_class: Some(DeviceClass::Power),
                     state_class: StateClass::Measurement,
-                    unit_of_measurement: Some("VA".to_owned()),
-                    value_template: Some("{{ value_json.apparent_power }}".to_owned()),
+                    unit_of_measurement: Some("W".to_owned()),
+                    value_template: Some("{{ value_json.battery_active_discharge_power }}".to_owned()),
                 },
             ),
             (
@@ -243,13 +303,23 @@ impl From<config::SunspecConfig> for Vec<MqttConfigPayload> {
                 },
             ),
             (
-                "grid_power",
+                "grid_consumption_power",
                 DeviceSpecificMqttConfig::Sensor {
-                    state_topic,
+                    state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
                     state_class: StateClass::Measurement,
                     unit_of_measurement: Some("W".to_owned()),
-                    value_template: Some("{{ value_json.grid_power }}".to_owned()),
+                    value_template: Some("{{ value_json.grid_consumption_power }}".to_owned()),
+                },
+            ),
+            (
+                "grid_backfeed_power",
+                DeviceSpecificMqttConfig::Sensor {
+                    state_topic: state_topic.clone(),
+                    device_class: Some(DeviceClass::Power),
+                    state_class: StateClass::Measurement,
+                    unit_of_measurement: Some("W".to_owned()),
+                    value_template: Some("{{ value_json.grid_backfeed_power }}".to_owned()),
                 },
             ),
         ];

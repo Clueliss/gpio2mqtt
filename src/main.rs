@@ -1,30 +1,30 @@
-#![feature(pin_macro)]
-
 mod config;
 mod covers;
 mod mqtt;
 mod sunspec;
 
-use std::pin::pin;
 use anyhow::Result;
 use covers::CoverCommand;
-use rumqttc::{AsyncClient, ConnectionError, Event, Incoming, MqttOptions, Publish};
+use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder};
 use std::{collections::HashMap, fs::File, net::SocketAddr, sync::Arc};
 use tokio::{
     select,
-    sync::Mutex,
+    sync::{mpsc, Mutex},
     time::{Duration, Instant, MissedTickBehavior},
-    sync::mpsc,
 };
 
 enum Message {
     Tick,
-    MqttEvent(Result<Event, ConnectionError>),
+    MqttEvent(Option<paho_mqtt::Message>),
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let config: config::Config = serde_yaml::from_reader(File::open("/etc/gpio2mqtt.yaml")?)?;
+    let config: config::Config = serde_yaml::from_reader(File::open(if cfg!(debug_assertions) {
+        "./gpio2mqtt.yaml"
+    } else {
+        "/etc/gpio2mqtt.yaml"
+    })?)?;
 
     let covers: HashMap<_, _> = config
         .covers
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
                 cover_conf.up_pin,
                 cover_conf.down_pin,
                 cover_conf.stop_pin,
-                Duration::from_millis(cover_conf.device.tx_timeout_ms.unwrap_or_default()),
+                Duration::from_millis(cover_conf.tx_timeout_ms.unwrap_or_default()),
                 &cover_conf.device.identifier,
             )?;
 
@@ -71,23 +71,46 @@ async fn main() -> Result<()> {
         .chain(config.sunspec_devices.into_iter().flatten().flat_map(Vec::<_>::from))
         .collect();
 
-    let opts = MqttOptions::new("gpio2mqtt_bridge", config.host, config.port);
-    let (client, mut eventloop) = AsyncClient::new(opts, 10);
+    let mut mqtt_client = AsyncClient::new(
+        CreateOptionsBuilder::new()
+            .server_uri(format!("tcp://{host}:{port}", host = config.host, port = config.port))
+            .client_id(if cfg!(debug_assertions) {
+                "gpio2mqtt_bridge2"
+            } else {
+                "gpio2mqtt_bridge"
+            })
+            .finalize(),
+    )?;
 
-    let mut sensor_timer = tokio::time::interval(Duration::from_secs(10));
-    sensor_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mqtt_stream = mqtt_client.get_stream(128);
+
+    mqtt_client
+        .connect(
+            ConnectOptionsBuilder::new()
+                .automatic_reconnect(Duration::from_secs(2u64.pow(3)), Duration::from_secs(2u64.pow(12)))
+                .max_inflight(128)
+                .will_message(mqtt::offline_message())
+                .finalize(),
+        )
+        .await?;
+
+    mqtt::announce_online(&mqtt_client).await?;
+    mqtt::register_devices(&mqtt_client, &payloads).await?;
 
     let transmission_timeout = Arc::new(Mutex::new(Instant::now()));
 
-
-    let (tx, mut rx) = mpsc::channel(128);
+    let (tx, mut rx) = mpsc::channel(1);
 
     {
+        let mut sensor_timer = tokio::time::interval(Duration::from_secs(1));
+        sensor_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         let tx = tx.clone();
         tokio::spawn(async move {
             loop {
                 sensor_timer.tick().await;
                 if let Err(_) = tx.send(Message::Tick).await {
+                    println!("Shutting down update timer");
                     return;
                 }
             }
@@ -95,13 +118,17 @@ async fn main() -> Result<()> {
     }
 
     {
-        let tx = tx.clone();
+        let tx = tx;
         tokio::spawn(async move {
             loop {
-                let event = eventloop.poll().await;
-                if let Err(_) = tx.send(Message::MqttEvent(event)).await {
+                let Ok(event) = mqtt_stream.recv().await else {
                     break;
-                }
+                };
+
+                let Ok(_) = tx.send(Message::MqttEvent(event)).await else {
+                    println!("Shutting down MQTT client");
+                    break;
+                };
             }
         });
     }
@@ -109,43 +136,38 @@ async fn main() -> Result<()> {
     loop {
         select! {
             _ = tokio::signal::ctrl_c() => {
-                let _ = mqtt::announce_offline(&client).await;
-                break;
+                let _ = mqtt::announce_offline(&mqtt_client).await;
+                break Ok(());
             },
             event = rx.recv() => match event.unwrap() {
                 Message::Tick => {
                     for (topic, sunspec) in &mut sunspec_devices {
                         match sunspec.measure().await {
-                            Ok(measurements) => mqtt::publish_state(&client, topic, &measurements).await?,
+                            Ok(measurements) => mqtt::publish_state(&mqtt_client, topic, &mqtt::SunspecState::from(measurements)).await?,
                             Err(e) => eprintln!("Error unable to read from sunspec modbus: {e}"),
                         }
                     }
                 },
-                Message::MqttEvent(Ok(Event::Incoming(Incoming::ConnAck(_)))) => {
-                    println!("MQTT connection ack incoming: announcing capabilities");
-                    mqtt::announce_online(&client).await?;
-                    mqtt::register_devices(&client, &payloads).await?;
-                },
-                Message::MqttEvent(Ok(Event::Incoming(Incoming::Publish(Publish { topic, payload, .. })))) => {
-                    println!("MQTT command incoming: topic '{topic}' payload '{payload:?}'");
-
-                    let Some(cover) = covers.get(&topic) else {
-                        eprintln!("MQTT error: unknown cover at {topic}");
-                        continue;
-                    };
-
-                    let payload = match String::from_utf8(payload.to_vec()) {
+                Message::MqttEvent(Some(msg)) => {
+                    let payload = match std::str::from_utf8(msg.payload()) {
                         Ok(payload) => payload,
                         Err(e) => {
-                            eprintln!("MQTT error: {e}");
+                            eprintln!("MQTT payload error: {e}");
                             continue;
                         }
+                    };
+
+                    println!("MQTT command incoming: topic '{}' payload '{}'", msg.topic(), payload);
+
+                    let Some(cover) = covers.get(msg.topic()) else {
+                        eprintln!("MQTT command error: unknown cover at {}", msg.topic());
+                        continue;
                     };
 
                     let cmd = match payload.parse() {
                         Ok(cmd) => cmd,
                         Err(e) => {
-                            eprintln!("MQTT error: {e}");
+                            eprintln!("MQTT payload error: {e}");
                             continue;
                         },
                     };
@@ -171,14 +193,10 @@ async fn main() -> Result<()> {
                         Ok::<_, anyhow::Error>(())
                     });
                 },
-                Message::MqttEvent(Err(ConnectionError::Io(e))) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-                    eprintln!("MQTT io error: {e}, retrying in 10s");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                Message::MqttEvent(None) => {
+                    break Err(anyhow::Error::msg("Lost connection to server"));
                 },
-                _ => (),
             }
         }
     }
-
-    Ok(())
 }

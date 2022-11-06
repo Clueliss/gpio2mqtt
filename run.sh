@@ -36,7 +36,7 @@ case $1 in
     ;;
   run)
     cross build --target $TARGET
-    ssh pi@$PI_IP rm /home/pi/gpio2mqtt
+    ssh pi@$PI_IP 'rm /home/pi/gpio2mqtt || true'
     scp ./target/$TARGET/debug/gpio2mqtt pi@$PI_IP:/home/pi
     ;;
 esac

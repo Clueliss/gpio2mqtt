@@ -34,7 +34,6 @@ pub struct Device {
     pub manufacturer: Option<String>,
     pub model: Option<String>,
     pub sw_version: Option<String>,
-    pub tx_timeout_ms: Option<u64>,
 }
 
 impl<'de> Deserialize<'de> for Identifier {
@@ -59,6 +58,7 @@ pub struct CoverConfig {
     pub up_pin: u32,
     pub down_pin: u32,
     pub stop_pin: u32,
+    pub tx_timeout_ms: Option<u64>,
     pub device: Device,
 }
 

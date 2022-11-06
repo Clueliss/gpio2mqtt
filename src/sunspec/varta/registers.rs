@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use modbus::{Address, Register};
 use std::ops::Range;
 

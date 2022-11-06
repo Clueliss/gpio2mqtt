@@ -1,49 +1,34 @@
 mod registers;
 
 use super::{Percentage, Quantity, WattHours, Watts};
+use crate::sunspec::VoltAmps;
 use modbus::{Modbus, Register};
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 use std::net::SocketAddr;
 use tokio::sync::OnceCell;
 
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum GridPower {
     Backfeed(Watts),
     Consumption(Watts),
 }
 
-impl GridPower {
-    fn serialize<S: Serializer>(power: &Option<GridPower>, s: S) -> Result<S::Ok, S::Error> {
-        match *power {
-            None => s.serialize_i16(0),
-            Some(GridPower::Backfeed(amount)) => s.serialize_i32(amount as i32),
-            Some(GridPower::Consumption(amount)) => s.serialize_i32(-(amount as i32)),
-        }
-    }
+#[derive(Debug, PartialEq, Eq)]
+pub enum BatteryPower<T> {
+    Charge(T),
+    Discharge(T),
 }
+
+pub type ActiveBatteryPower = BatteryPower<Watts>;
+pub type ApparentBatteryPower = BatteryPower<VoltAmps>;
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
-pub enum BatteryPower {
-    Charge(Watts),
-    Discharge(Watts),
-}
-
-impl BatteryPower {
-    fn serialize<S: Serializer>(power: &Option<BatteryPower>, s: S) -> Result<S::Ok, S::Error> {
-        match *power {
-            None => s.serialize_i16(0),
-            Some(BatteryPower::Charge(amount)) => s.serialize_i32(amount as i32),
-            Some(BatteryPower::Discharge(amount)) => s.serialize_i32(-(amount as i32)),
-        }
-    }
-}
-
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum State {
     Busy,
     Ready,
-    Charge,
-    Discharge,
+    Charging,
+    Discharging,
     Standby,
     Error,
     Passive,
@@ -59,8 +44,8 @@ impl TryFrom<u16> for State {
         match value {
             0 => Ok(Busy),
             1 => Ok(Ready),
-            2 => Ok(Charge),
-            3 => Ok(Discharge),
+            2 => Ok(Charging),
+            3 => Ok(Discharging),
             4 => Ok(Standby),
             5 => Ok(Error),
             6 => Ok(Passive),
@@ -70,17 +55,13 @@ impl TryFrom<u16> for State {
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Debug)]
 pub struct Measurements {
     pub state: State,
     pub state_of_charge: Percentage,
     pub total_charge_energy: WattHours,
-
-    #[serde(serialize_with = "BatteryPower::serialize")]
-    pub active_power: Option<BatteryPower>,
-    #[serde(serialize_with = "BatteryPower::serialize")]
-    pub apparent_power: Option<BatteryPower>,
-    #[serde(serialize_with = "GridPower::serialize")]
+    pub active_battery_power: Option<ActiveBatteryPower>,
+    pub apparent_battery_power: Option<ApparentBatteryPower>,
     pub grid_power: Option<GridPower>,
 }
 
@@ -163,7 +144,7 @@ impl ElementSunspecClient {
 
         Ok(Measurements {
             state: slice(registers::STATE)[0].try_into().unwrap(),
-            active_power: {
+            active_battery_power: {
                 let value = slice(registers::ACTIVE_POWER)[0] as i16;
                 match value {
                     ..=-1 => Some(BatteryPower::Discharge(value.unsigned_abs())),
@@ -171,7 +152,7 @@ impl ElementSunspecClient {
                     1.. => Some(BatteryPower::Charge(value as u16)),
                 }
             },
-            apparent_power: {
+            apparent_battery_power: {
                 let value = slice(registers::APPARENT_POWER)[0] as i16;
                 match value {
                     ..=-1 => Some(BatteryPower::Discharge(value.unsigned_abs())),
