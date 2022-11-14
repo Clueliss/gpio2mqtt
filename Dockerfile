@@ -1,4 +1,7 @@
 FROM rustlang/rust:nightly-bullseye-slim AS builder
+
+RUN apt-get update && apt-get install -y cmake gcc
+
 WORKDIR /usr/local/src/gpio2mqtt
 COPY ./Cargo.toml ./
 COPY ./src ./src
