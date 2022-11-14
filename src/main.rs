@@ -3,9 +3,9 @@ mod covers;
 mod mqtt;
 mod sunspec;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use covers::CoverCommand;
-use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder};
+use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, PersistenceType};
 use std::{collections::HashMap, fs::File, net::SocketAddr, sync::Arc};
 use tokio::{
     select,
@@ -81,6 +81,7 @@ async fn main() -> Result<()> {
         CreateOptionsBuilder::new()
             .server_uri(format!("tcp://{host}:{port}", host = config.host, port = config.port))
             .client_id(config.client_id)
+            .persistence(PersistenceType::None)
             .finalize(),
     )
     .context("Failed to create MQTT client")?;
@@ -207,7 +208,7 @@ async fn main() -> Result<()> {
                     });
                 },
                 Message::MqttEvent(None) => {
-                    break Err(anyhow::Error::msg("Lost connection to server"));
+                    break Err(anyhow!("Lost connection to server"));
                 },
             }
         }
