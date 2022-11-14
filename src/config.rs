@@ -12,9 +12,15 @@ const fn default_mqtt_port() -> u16 {
 const fn default_sunspec_port() -> u16 {
     502
 }
+fn default_client_id() -> String {
+    "gpio2mqtt_bridge".to_owned()
+}
 
 #[derive(Deserialize)]
 pub struct Config {
+    #[serde(default = "default_client_id")]
+    pub client_id: String,
+
     pub covers: Option<Vec<CoverConfig>>,
     pub sunspec_devices: Option<Vec<SunspecConfig>>,
     pub host: String,

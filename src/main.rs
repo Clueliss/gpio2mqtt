@@ -74,11 +74,7 @@ async fn main() -> Result<()> {
     let mut mqtt_client = AsyncClient::new(
         CreateOptionsBuilder::new()
             .server_uri(format!("tcp://{host}:{port}", host = config.host, port = config.port))
-            .client_id(if cfg!(debug_assertions) {
-                "gpio2mqtt_bridge2"
-            } else {
-                "gpio2mqtt_bridge"
-            })
+            .client_id(config.client_id)
             .finalize(),
     )?;
 
@@ -101,7 +97,7 @@ async fn main() -> Result<()> {
 
     let (tx, mut rx) = mpsc::channel(1);
 
-    {
+    if sunspec_devices.len() > 0 {
         let mut sensor_timer = tokio::time::interval(Duration::from_secs(1));
         sensor_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -125,10 +121,10 @@ async fn main() -> Result<()> {
                     break;
                 };
 
-                let Ok(_) = tx.send(Message::MqttEvent(event)).await else {
+                if let Err(_) = tx.send(Message::MqttEvent(event)).await {
                     println!("Shutting down MQTT client");
                     break;
-                };
+                }
             }
         });
     }
