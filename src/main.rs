@@ -3,7 +3,7 @@ mod covers;
 mod mqtt;
 mod sunspec;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use covers::CoverCommand;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder};
 use std::{collections::HashMap, fs::File, net::SocketAddr, sync::Arc};
@@ -20,11 +20,16 @@ enum Message {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let config: config::Config = serde_yaml::from_reader(File::open(if cfg!(debug_assertions) {
+    let config_path = if cfg!(debug_assertions) {
         "./gpio2mqtt.yaml"
     } else {
         "/etc/gpio2mqtt.yaml"
-    })?)?;
+    };
+
+    let config = File::open(config_path).with_context(|| format!("Failed to open config file {config_path:?}"))?;
+
+    let config: config::Config =
+        serde_yaml::from_reader(config).with_context(|| format!("Failed to parse config file {config_path:?}"))?;
 
     let covers: HashMap<_, _> = config
         .covers
@@ -45,7 +50,8 @@ async fn main() -> Result<()> {
                 Arc::new(covers::stateless_gpio::Cover::new(opts)),
             ))
         })
-        .collect::<Result<_>>()?;
+        .collect::<Result<_>>()
+        .context("Failed to set up GPIO pins")?;
 
     let mut sunspec_devices = {
         let mut tmp: HashMap<_, _> = Default::default();
@@ -76,7 +82,8 @@ async fn main() -> Result<()> {
             .server_uri(format!("tcp://{host}:{port}", host = config.host, port = config.port))
             .client_id(config.client_id)
             .finalize(),
-    )?;
+    )
+    .context("Failed to create MQTT client")?;
 
     let mqtt_stream = mqtt_client.get_stream(128);
 
@@ -88,10 +95,16 @@ async fn main() -> Result<()> {
                 .will_message(mqtt::offline_message())
                 .finalize(),
         )
-        .await?;
+        .await
+        .context("Failed to connect to MQTT broker")?;
 
-    mqtt::announce_online(&mqtt_client).await?;
-    mqtt::register_devices(&mqtt_client, &payloads).await?;
+    mqtt::announce_online(&mqtt_client)
+        .await
+        .context("Failed to announce online status")?;
+
+    mqtt::register_devices(&mqtt_client, &payloads)
+        .await
+        .context("Failed to register devices")?;
 
     let transmission_timeout = Arc::new(Mutex::new(Instant::now()));
 
@@ -139,7 +152,11 @@ async fn main() -> Result<()> {
                 Message::Tick => {
                     for (topic, sunspec) in &mut sunspec_devices {
                         match sunspec.measure().await {
-                            Ok(measurements) => mqtt::publish_state(&mqtt_client, topic, &mqtt::SunspecState::from(measurements)).await?,
+                            Ok(measurements) => {
+                                mqtt::publish_state(&mqtt_client, topic, &mqtt::SunspecState::from(measurements))
+                                    .await
+                                    .context("Unable to publish state")?
+                            },
                             Err(e) => eprintln!("Error unable to read from sunspec modbus: {e}"),
                         }
                     }

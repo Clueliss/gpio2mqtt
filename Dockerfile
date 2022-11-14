@@ -9,10 +9,8 @@ RUN cargo build --release
 
 
 FROM debian:bullseye-slim
-
-COPY ./gpio2mqtt.yaml /etc/gpio2mqtt.yaml
+ENV RUST_BACKTRACE=1
 COPY --from=builder /usr/local/src/gpio2mqtt/target/release/gpio2mqtt /usr/local/bin/
-
 RUN chmod +x /usr/local/bin/gpio2mqtt
 
 ENTRYPOINT ["/usr/local/bin/gpio2mqtt"]
