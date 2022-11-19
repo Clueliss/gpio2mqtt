@@ -63,7 +63,13 @@ pub async fn announce_offline(client: &AsyncClient) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn publish_state(client: &AsyncClient, topic: &str, payload: &impl Serialize) -> anyhow::Result<()> {
+pub async fn publish_state<S: Into<String>>(
+    client: &AsyncClient,
+    topic: S,
+    payload: &impl Serialize,
+) -> anyhow::Result<()> {
+    let topic = topic.into();
+
     println!(
         "MQTT publish topic: '{}' payload: '{}'",
         topic,

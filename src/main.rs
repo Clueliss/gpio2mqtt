@@ -3,10 +3,11 @@ mod covers;
 mod mqtt;
 mod sunspec;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use covers::CoverCommand;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, PersistenceType};
 use std::{collections::HashMap, fs::File, net::SocketAddr, sync::Arc};
+use sunspec::varta::Measurements;
 use tokio::{
     select,
     sync::{mpsc, Mutex},
@@ -14,7 +15,7 @@ use tokio::{
 };
 
 enum Message {
-    Tick,
+    SunspecMeasurement(String, Measurements),
     MqttEvent(Option<paho_mqtt::Message>),
 }
 
@@ -53,7 +54,7 @@ async fn main() -> Result<()> {
         .collect::<Result<_>>()
         .context("Failed to set up GPIO pins")?;
 
-    let mut sunspec_devices = {
+    let sunspec_devices = {
         let mut tmp: HashMap<_, _> = Default::default();
 
         for sunspec_conf in config.sunspec_devices.iter().flatten() {
@@ -111,19 +112,53 @@ async fn main() -> Result<()> {
 
     let (tx, mut rx) = mpsc::channel(1);
 
-    if sunspec_devices.len() > 0 {
-        let mut sensor_timer = tokio::time::interval(Duration::from_secs(1));
+    for (topic, mut sunspec_dev) in sunspec_devices {
+        let mut sensor_timer = tokio::time::interval(Duration::from_millis(50));
         sensor_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         let tx = tx.clone();
         tokio::spawn(async move {
+            let mut last_measurement = None;
+
             loop {
                 sensor_timer.tick().await;
-                if let Err(_) = tx.send(Message::Tick).await {
-                    println!("Shutting down update timer");
-                    return;
+
+                match tokio::time::timeout(Duration::from_secs(5), sunspec_dev.measure()).await {
+                    Ok(Ok(measurement)) => {
+                        last_measurement = Some(measurement);
+
+                        if let Err(_) = tx.send(Message::SunspecMeasurement(topic.clone(), measurement)).await {
+                            break;
+                        }
+                    },
+                    Ok(Err(e)) => eprintln!("Error unable to read from sunspec modbus: {e}"),
+                    Err(elapsed) => {
+                        eprintln!(
+                            "Error modbus request for {topic} timed out after {elapsed}, trying again in 1 minute"
+                        );
+
+                        if let Some(last_measurement) = last_measurement.take() {
+                            let placeholder_measurement = Measurements {
+                                active_battery_power: None,
+                                apparent_battery_power: None,
+                                grid_power: None,
+                                ..last_measurement
+                            };
+
+                            if let Err(_) = tx
+                                .send(Message::SunspecMeasurement(topic.clone(), placeholder_measurement))
+                                .await
+                            {
+                                break;
+                            }
+                        }
+
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                    },
                 }
             }
+
+            println!("Shutting down update timer");
         });
     }
 
@@ -135,11 +170,16 @@ async fn main() -> Result<()> {
                     break;
                 };
 
+                let event_was_none = event.is_none();
                 if let Err(_) = tx.send(Message::MqttEvent(event)).await {
-                    println!("Shutting down MQTT client");
+                    break;
+                }
+                if event_was_none {
                     break;
                 }
             }
+
+            println!("Shutting down MQTT client");
         });
     }
 
@@ -150,17 +190,10 @@ async fn main() -> Result<()> {
                 break Ok(());
             },
             event = rx.recv() => match event.unwrap() {
-                Message::Tick => {
-                    for (topic, sunspec) in &mut sunspec_devices {
-                        match sunspec.measure().await {
-                            Ok(measurements) => {
-                                mqtt::publish_state(&mqtt_client, topic, &mqtt::SunspecState::from(measurements))
-                                    .await
-                                    .context("Unable to publish state")?
-                            },
-                            Err(e) => eprintln!("Error unable to read from sunspec modbus: {e}"),
-                        }
-                    }
+                Message::SunspecMeasurement(topic, measurement) => {
+                    mqtt::publish_state(&mqtt_client, topic, &mqtt::SunspecState::from(measurement))
+                        .await
+                        .context("Unable to publish state")?;
                 },
                 Message::MqttEvent(Some(msg)) => {
                     let payload = match std::str::from_utf8(msg.payload()) {

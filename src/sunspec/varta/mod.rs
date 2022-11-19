@@ -7,13 +7,13 @@ use serde::Serialize;
 use std::net::SocketAddr;
 use tokio::sync::OnceCell;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum GridPower {
     Backfeed(Watts),
     Consumption(Watts),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum BatteryPower<T> {
     Charge(T),
     Discharge(T),
@@ -22,7 +22,7 @@ pub enum BatteryPower<T> {
 pub type ActiveBatteryPower = BatteryPower<Watts>;
 pub type ApparentBatteryPower = BatteryPower<VoltAmps>;
 
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Debug, PartialEq, Eq, Copy, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
     Busy,
@@ -55,7 +55,7 @@ impl TryFrom<u16> for State {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Measurements {
     pub state: State,
     pub state_of_charge: Percentage,
