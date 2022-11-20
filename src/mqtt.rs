@@ -257,12 +257,12 @@ impl ConfigPayload {
 
         Self {
             config_topic: format!("{MQTT_DISCOVERY_TOPIC}/cover/{unique_id}/config"),
-            unique_id,
+            unique_id: unique_id.clone(),
             specific: DeviceSpecificConfig::Cover { command_topic: command_topic_for_dev_id(client_id, &dev_id) },
             availability: vec![AvailabilityPayload { topic: mqtt_avail_topic(client_id) }],
             device: DevicePayload {
                 name: conf.name.clone(),
-                identifiers: vec![dev_id.0],
+                identifiers: vec![unique_id],
                 manufacturer: conf.device.manufacturer,
                 model: conf.device.model,
                 sw_version: None,
@@ -355,7 +355,7 @@ impl ConfigPayload {
 
         let unique_id = format!("{client_id}_{dev_id}", dev_id = dev_id.0);
 
-        let mut identifiers = vec![dev_id.0];
+        let mut identifiers = vec![unique_id.clone()];
 
         if let Some(specs) = specs {
             identifiers.push(Self::format_sunspec_serial_number(specs.serial_number));
