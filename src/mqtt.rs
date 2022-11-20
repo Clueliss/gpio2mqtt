@@ -1,8 +1,9 @@
 use paho_mqtt::{AsyncClient, Message};
 use serde::Serialize;
+use std::fmt::Write;
 
 use crate::{
-    config,
+    config, sunspec,
     sunspec::{
         varta::{BatteryPower, GridPower, Measurements, State},
         Percentage, WattHours, Watts,
@@ -229,8 +230,28 @@ pub struct MqttConfigPayload {
     pub specific: DeviceSpecificMqttConfig,
 }
 
-impl From<config::CoverConfig> for MqttConfigPayload {
-    fn from(conf: config::CoverConfig) -> Self {
+impl MqttConfigPayload {
+    fn format_sunspec_serial_number(serial_number: [u16; 10]) -> String {
+        let mut s = String::new();
+
+        for num in serial_number.into_iter().take_while(|&c| c != 0) {
+            write!(&mut s, "{num}").unwrap();
+        }
+
+        s
+    }
+
+    fn format_sunspec_software_version(serial_number: [u16; 17]) -> String {
+        let mut s = String::new();
+
+        for num in serial_number.into_iter().take_while(|&c| c != 0) {
+            s.push(char::from(num as u8));
+        }
+
+        s
+    }
+
+    pub fn from_cover_config(conf: config::CoverConfig) -> Self {
         let dev_id = conf.device.identifier;
         let unique_id = format!("{MQTT_BASE_TOPIC}_{dev_id}", dev_id = dev_id.0);
 
@@ -249,10 +270,11 @@ impl From<config::CoverConfig> for MqttConfigPayload {
             name: conf.name,
         }
     }
-}
 
-impl From<config::SunspecConfig> for Vec<MqttConfigPayload> {
-    fn from(conf: config::SunspecConfig) -> Self {
+    pub fn from_sunspec(
+        conf: config::SunspecConfig,
+        specs: Option<&sunspec::varta::DeviceSpecifications>,
+    ) -> Vec<Self> {
         let dev_id = conf.device.identifier;
 
         let state_topic = state_topic_for_dev_id(&dev_id);
@@ -332,20 +354,31 @@ impl From<config::SunspecConfig> for Vec<MqttConfigPayload> {
 
         let unique_id = format!("{MQTT_BASE_TOPIC}_{dev_id}", dev_id = dev_id.0);
 
+        let mut identifiers = vec![dev_id.0];
+
+        if let Some(specs) = specs {
+            identifiers.push(Self::format_sunspec_serial_number(specs.serial_number));
+        }
+
+        let sw_version = conf
+            .device
+            .sw_version
+            .or_else(|| specs.map(|specs| Self::format_sunspec_software_version(specs.software_version_ens)));
+
         sensors
             .into_iter()
-            .map(move |(name, sensor)| MqttConfigPayload {
-                config_topic: format!("{MQTT_DISCOVERY_TOPIC}/sensor/{unique_id}/{name}/config"),
-                unique_id: format!("{unique_id}_{name}"),
+            .map(move |(sensor_name, sensor)| MqttConfigPayload {
+                config_topic: format!("{MQTT_DISCOVERY_TOPIC}/sensor/{unique_id}/{sensor_name}/config"),
+                unique_id: format!("{unique_id}_{sensor_name}"),
                 availability: vec![AvailabilityPayload { topic: MQTT_AVAIL_TOPIC.to_string() }],
                 device: DevicePayload {
                     name: conf.name.clone(),
-                    identifiers: vec![dev_id.0.clone()],
                     manufacturer: conf.device.manufacturer.clone(),
                     model: conf.device.model.clone(),
-                    sw_version: conf.device.sw_version.clone(),
+                    identifiers: identifiers.clone(),
+                    sw_version: sw_version.clone(),
                 },
-                name: format!("{} {name}", conf.name),
+                name: format!("{} {sensor_name}", conf.name),
                 specific: sensor,
             })
             .collect()

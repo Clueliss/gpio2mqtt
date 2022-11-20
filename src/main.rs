@@ -1,23 +1,17 @@
 mod config;
 mod covers;
+mod eventloop;
 mod mqtt;
 mod sunspec;
 
 use anyhow::{anyhow, Context, Result};
-use covers::CoverCommand;
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, PersistenceType};
 use std::{collections::HashMap, fs::File, net::SocketAddr, sync::Arc};
-use sunspec::varta::Measurements;
 use tokio::{
     select,
     sync::{mpsc, Mutex},
-    time::{Duration, Instant, MissedTickBehavior},
+    time::Duration,
 };
-
-enum Message {
-    SunspecMeasurement(String, Measurements),
-    MqttEvent(Option<paho_mqtt::Message>),
-}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -32,55 +26,85 @@ async fn main() -> Result<()> {
     let config: config::Config =
         serde_yaml::from_reader(config).with_context(|| format!("Failed to parse config file {config_path:?}"))?;
 
-    let covers: HashMap<_, _> = config
+    let covers: Vec<(Duration, HashMap<_, _>)> = config
         .covers
         .iter()
         .flatten()
-        .map(|cover_conf| {
-            let opts = covers::stateless_gpio::Options::from_chip_offsets(
-                &cover_conf.chip,
-                cover_conf.up_pin,
-                cover_conf.down_pin,
-                cover_conf.stop_pin,
-                Duration::from_millis(cover_conf.tx_timeout_ms.unwrap_or_default()),
-                &cover_conf.device.identifier,
-            )?;
+        .map(|cover_group| {
+            let covers = cover_group
+                .devices
+                .iter()
+                .map(|cover_conf| {
+                    Ok((
+                        mqtt::command_topic_for_dev_id(&cover_conf.device.identifier),
+                        (
+                            Duration::from_millis(cover_conf.device_gpio_pause_ms.unwrap_or_default()),
+                            covers::stateless_gpio::Cover::from_chip_offsets(
+                                &cover_conf.chip,
+                                cover_conf.up_pin,
+                                cover_conf.down_pin,
+                                cover_conf.stop_pin,
+                            )?,
+                        ),
+                    ))
+                })
+                .collect::<Result<_>>()?;
 
             Ok((
-                mqtt::command_topic_for_dev_id(&cover_conf.device.identifier),
-                Arc::new(covers::stateless_gpio::Cover::new(opts)),
+                Duration::from_millis(cover_group.group_gpio_pause_ms.unwrap_or_default()),
+                covers,
             ))
         })
         .collect::<Result<_>>()
         .context("Failed to set up GPIO pins")?;
 
-    let sunspec_devices = {
-        let mut tmp: HashMap<_, _> = Default::default();
-
-        for sunspec_conf in config.sunspec_devices.iter().flatten() {
-            tmp.insert(
+    let mut sunspec_devices: HashMap<_, _> = config
+        .sunspec
+        .iter()
+        .flatten()
+        .map(|sunspec_conf| {
+            Ok((
                 mqtt::state_topic_for_dev_id(&sunspec_conf.device.identifier),
-                sunspec::varta::ElementSunspecClient::new(SocketAddr::new(
-                    sunspec_conf.host.parse()?,
-                    sunspec_conf.port,
-                )),
-            );
+                (
+                    Duration::from_millis(sunspec_conf.device_polling_delay_ms),
+                    sunspec::varta::ElementSunspecClient::new(SocketAddr::new(
+                        sunspec_conf.host.parse()?,
+                        sunspec_conf.host_port,
+                    )),
+                ),
+            ))
+        })
+        .collect::<Result<_>>()
+        .context("Failed to setup sunspec devices")?;
+
+    let payloads = {
+        let mut payloads = Vec::new();
+
+        for cover_group in config.covers.into_iter().flatten() {
+            for cover_conf in cover_group.devices {
+                payloads.push(mqtt::MqttConfigPayload::from_cover_config(cover_conf));
+            }
         }
 
-        tmp
-    };
+        for sunspec_conf in config.sunspec.into_iter().flatten() {
+            let (_, device) = sunspec_devices
+                .get_mut(&mqtt::state_topic_for_dev_id(&sunspec_conf.device.identifier))
+                .unwrap();
 
-    let payloads: Vec<mqtt::MqttConfigPayload> = config
-        .covers
-        .into_iter()
-        .flatten()
-        .map(Into::into)
-        .chain(config.sunspec_devices.into_iter().flatten().flat_map(Vec::<_>::from))
-        .collect();
+            let specs = device.specifications().await.ok();
+            payloads.extend(mqtt::MqttConfigPayload::from_sunspec(sunspec_conf, specs.as_ref()));
+        }
+
+        payloads
+    };
 
     let mut mqtt_client = AsyncClient::new(
         CreateOptionsBuilder::new()
-            .server_uri(format!("tcp://{host}:{port}", host = config.host, port = config.port))
+            .server_uri(format!(
+                "tcp://{host}:{port}",
+                host = config.broker,
+                port = config.broker_port
+            ))
             .client_id(config.client_id)
             .persistence(PersistenceType::None)
             .finalize(),
@@ -108,59 +132,33 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to register devices")?;
 
-    let transmission_timeout = Arc::new(Mutex::new(Instant::now()));
-
     let (tx, mut rx) = mpsc::channel(1);
 
-    for (topic, mut sunspec_dev) in sunspec_devices {
-        let mut sensor_timer = tokio::time::interval(Duration::from_millis(50));
-        sensor_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let mut last_measurement = None;
-
-            loop {
-                sensor_timer.tick().await;
-
-                match tokio::time::timeout(Duration::from_secs(5), sunspec_dev.measure()).await {
-                    Ok(Ok(measurement)) => {
-                        last_measurement = Some(measurement);
-
-                        if let Err(_) = tx.send(Message::SunspecMeasurement(topic.clone(), measurement)).await {
-                            break;
-                        }
-                    },
-                    Ok(Err(e)) => eprintln!("Error unable to read from sunspec modbus: {e}"),
-                    Err(elapsed) => {
-                        eprintln!(
-                            "Error modbus request for {topic} timed out after {elapsed}, trying again in 1 minute"
-                        );
-
-                        if let Some(last_measurement) = last_measurement.take() {
-                            let placeholder_measurement = Measurements {
-                                active_battery_power: None,
-                                apparent_battery_power: None,
-                                grid_power: None,
-                                ..last_measurement
-                            };
-
-                            if let Err(_) = tx
-                                .send(Message::SunspecMeasurement(topic.clone(), placeholder_measurement))
-                                .await
-                            {
-                                break;
-                            }
-                        }
-
-                        tokio::time::sleep(Duration::from_secs(60)).await;
-                    },
-                }
-            }
-
-            println!("Shutting down update timer");
-        });
+    for (topic, (polling_delay, device)) in sunspec_devices {
+        tokio::spawn(eventloop::sunspec_event_loop(topic, polling_delay, device, tx.clone()));
     }
+
+    let cover_channels = {
+        let mut cover_channels = HashMap::new();
+
+        for (group_delay, group) in covers {
+            let group_gpio_pause = Arc::new(Mutex::new(eventloop::Pause::new(group_delay)));
+
+            for (topic, (device_gpio_pause, device)) in group {
+                let (tx, fut) = eventloop::stateless_cover_event_loop(
+                    topic.clone(),
+                    group_gpio_pause.clone(),
+                    device_gpio_pause,
+                    device,
+                );
+
+                cover_channels.insert(topic, tx);
+                tokio::spawn(fut);
+            }
+        }
+
+        cover_channels
+    };
 
     {
         let tx = tx;
@@ -171,7 +169,7 @@ async fn main() -> Result<()> {
                 };
 
                 let event_was_none = event.is_none();
-                if let Err(_) = tx.send(Message::MqttEvent(event)).await {
+                if let Err(_) = tx.send(eventloop::Message::MqttEvent(event)).await {
                     break;
                 }
                 if event_was_none {
@@ -190,12 +188,12 @@ async fn main() -> Result<()> {
                 break Ok(());
             },
             event = rx.recv() => match event.unwrap() {
-                Message::SunspecMeasurement(topic, measurement) => {
+                eventloop::Message::SunspecMeasurement(topic, measurement) => {
                     mqtt::publish_state(&mqtt_client, topic, &mqtt::SunspecState::from(measurement))
                         .await
                         .context("Unable to publish state")?;
                 },
-                Message::MqttEvent(Some(msg)) => {
+                eventloop::Message::MqttEvent(Some(msg)) => {
                     let payload = match std::str::from_utf8(msg.payload()) {
                         Ok(payload) => payload,
                         Err(e) => {
@@ -206,7 +204,7 @@ async fn main() -> Result<()> {
 
                     println!("MQTT command incoming: topic '{}' payload '{}'", msg.topic(), payload);
 
-                    let Some(cover) = covers.get(msg.topic()) else {
+                    let Some(chan) = cover_channels.get(msg.topic()) else {
                         eprintln!("MQTT command error: unknown cover at {}", msg.topic());
                         continue;
                     };
@@ -219,28 +217,9 @@ async fn main() -> Result<()> {
                         },
                     };
 
-                    let c = cover.clone();
-                    let tt = transmission_timeout.clone();
-
-                    tokio::spawn(async move {
-                        let mut tt = tt.lock().await;
-                        tokio::time::sleep_until(*tt).await;
-
-                        let t1 = Instant::now();
-
-                        match cmd {
-                            CoverCommand::Open => c.move_up().await?,
-                            CoverCommand::Close => c.move_down().await?,
-                            CoverCommand::Stop => c.stop().await?,
-                        }
-
-                        let elapsed = Instant::now() - t1;
-                        *tt = Instant::now() + (Duration::from_millis(config.global_tx_timeout_ms) - elapsed);
-
-                        Ok::<_, anyhow::Error>(())
-                    });
+                    chan.send(cmd).unwrap();
                 },
-                Message::MqttEvent(None) => {
+                eventloop::Message::MqttEvent(None) => {
                     break Err(anyhow!("Lost connection to server"));
                 },
             }

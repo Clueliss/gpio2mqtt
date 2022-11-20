@@ -21,14 +21,13 @@ pub struct Config {
     #[serde(default = "default_client_id")]
     pub client_id: String,
 
-    pub covers: Option<Vec<CoverConfig>>,
-    pub sunspec_devices: Option<Vec<SunspecConfig>>,
-    pub host: String,
+    pub covers: Option<Vec<CoverGroup>>,
+    pub sunspec: Option<Vec<SunspecConfig>>,
+
+    pub broker: String,
 
     #[serde(default = "default_mqtt_port")]
-    pub port: u16,
-
-    pub global_tx_timeout_ms: u64,
+    pub broker_port: u16,
 }
 
 #[derive(Serialize, Debug)]
@@ -58,13 +57,19 @@ impl<'de> Deserialize<'de> for Identifier {
 }
 
 #[derive(Deserialize)]
+pub struct CoverGroup {
+    pub group_gpio_pause_ms: Option<u64>,
+    pub devices: Vec<CoverConfig>,
+}
+
+#[derive(Deserialize)]
 pub struct CoverConfig {
     pub name: String,
     pub chip: PathBuf,
     pub up_pin: u32,
     pub down_pin: u32,
     pub stop_pin: u32,
-    pub tx_timeout_ms: Option<u64>,
+    pub device_gpio_pause_ms: Option<u64>,
     pub device: Device,
 }
 
@@ -73,7 +78,7 @@ pub struct SunspecConfig {
     pub name: String,
     pub device: Device,
     pub host: String,
-
     #[serde(default = "default_sunspec_port")]
-    pub port: u16,
+    pub host_port: u16,
+    pub device_polling_delay_ms: u64,
 }

@@ -1,31 +1,33 @@
-host: 192.168.0.20
+broker: 192.168.0.20
 client_id: gpio2mqtt_bridge_debug
-global_tx_timeout_ms: 1000
-#covers:
-#    -   name: Rolladen über Bett
-#        chip: /dev/gpiochip0
-#        up_pin: 2
-#        down_pin: 4
-#        stop_pin: 3
-#        tx_timeout_ms: 300
-#        device:
-#            identifier: velux_integra_1
-#            manufacturer: VELUX
-#            model: INTEGRA
-#    -   name: Rolladen Küche
-#        chip: /dev/gpiochip0
-#        up_pin: 8
-#        down_pin: 7
-#        stop_pin: 25
-#        tx_timeout_ms: 300
-#        device:
-#            identifier: velux_integra_2
-#            manufacturer: VELUX
-#            model: INTEGRA
-sunspec_devices:
-    -   name: Varta Element
+covers:
+    -   group_gpio_pause_ms: 1000
+        devices:
+            -   name: Rolladen über Bett
+                chip: /dev/gpiochip0
+                up_pin: 2
+                down_pin: 4
+                stop_pin: 3
+                device_gpio_pause_ms: 300
+                device:
+                    identifier: velux_integra_1
+                    manufacturer: VELUX
+                    model: INTEGRA
+            -   name: Rolladen Küche
+                chip: /dev/gpiochip0
+                up_pin: 8
+                down_pin: 7
+                stop_pin: 25
+                device_gpio_pause_ms: 300
+                device:
+                    identifier: velux_integra_2
+                    manufacturer: VELUX
+                    model: INTEGRA
+sunspec:
+    -   name: VARTA element
         host: 192.168.0.52
+        device_polling_delay_ms: 1000
         device:
             identifier: varta_element_1
-            manufacturer: Varta
-            model: Element
+            manufacturer: VARTA
+            model: element

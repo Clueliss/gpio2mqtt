@@ -5,7 +5,6 @@ use crate::sunspec::VoltAmps;
 use modbus::{Modbus, Register};
 use serde::Serialize;
 use std::net::SocketAddr;
-use tokio::sync::OnceCell;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum GridPower {
@@ -78,52 +77,42 @@ pub struct DeviceSpecifications {
 
 pub struct ElementSunspecClient {
     client: Modbus,
-    spec_cache: OnceCell<DeviceSpecifications>,
 }
 
 impl ElementSunspecClient {
     pub fn new(addr: SocketAddr) -> Self {
-        Self { client: Modbus::new(addr), spec_cache: Default::default() }
+        Self { client: Modbus::new(addr) }
     }
 
     pub async fn specifications(&mut self) -> modbus::Result<DeviceSpecifications> {
-        self.spec_cache
-            .get_or_try_init(|| async {
-                let response1 = self
-                    .client
-                    .read_input_registers(
-                        registers::SOFTWARE_VERSION_EMS.start..registers::INSTALLED_BATTERY_MODULES.end,
-                    )
-                    .await?;
+        let response1 = self
+            .client
+            .read_input_registers(registers::SOFTWARE_VERSION_EMS.start..registers::INSTALLED_BATTERY_MODULES.end)
+            .await?;
 
-                let response2 = self
-                    .client
-                    .read_input_registers(registers::INSTALLED_BATTERY_CAPACITY)
-                    .await?;
+        let response2 = self
+            .client
+            .read_input_registers(registers::INSTALLED_BATTERY_CAPACITY)
+            .await?;
 
-                let slice = |reg: Register| {
-                    if reg == registers::INSTALLED_BATTERY_CAPACITY {
-                        &response2[..]
-                    } else {
-                        &response1[(reg.start - registers::SOFTWARE_VERSION_EMS.start) as usize
-                            ..(reg.end - registers::SOFTWARE_VERSION_EMS.start) as usize]
-                    }
-                };
+        let slice = |reg: Register| {
+            if reg == registers::INSTALLED_BATTERY_CAPACITY {
+                &response2[..]
+            } else {
+                &response1[(reg.start - registers::SOFTWARE_VERSION_EMS.start) as usize
+                    ..(reg.end - registers::SOFTWARE_VERSION_EMS.start) as usize]
+            }
+        };
 
-                let specs = DeviceSpecifications {
-                    software_version_ems: slice(registers::SOFTWARE_VERSION_EMS).try_into().unwrap(),
-                    software_version_ens: slice(registers::SOFTWARE_VERSION_ENS).try_into().unwrap(),
-                    software_version_inverter: slice(registers::SOFTWARE_VERSION_INVERTER).try_into().unwrap(),
-                    table_version: slice(registers::TABLE_VERSION)[0],
-                    serial_number: slice(registers::SERIAL_NUMBER).try_into().unwrap(),
-                    installed_battery_modules: slice(registers::INSTALLED_BATTERY_MODULES)[0],
-                    installed_battery_capacity: slice(registers::INSTALLED_BATTERY_CAPACITY)[0] as u32,
-                };
-
-                Ok(specs)
-            })
-            .await
-            .cloned()
+        Ok(DeviceSpecifications {
+            software_version_ems: slice(registers::SOFTWARE_VERSION_EMS).try_into().unwrap(),
+            software_version_ens: slice(registers::SOFTWARE_VERSION_ENS).try_into().unwrap(),
+            software_version_inverter: slice(registers::SOFTWARE_VERSION_INVERTER).try_into().unwrap(),
+            table_version: slice(registers::TABLE_VERSION)[0],
+            serial_number: slice(registers::SERIAL_NUMBER).try_into().unwrap(),
+            installed_battery_modules: slice(registers::INSTALLED_BATTERY_MODULES)[0],
+            installed_battery_capacity: slice(registers::INSTALLED_BATTERY_CAPACITY)[0] as u32,
+        })
     }
 
     pub async fn measure(&mut self) -> modbus::Result<Measurements> {
