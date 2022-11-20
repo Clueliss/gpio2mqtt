@@ -10,15 +10,15 @@ use crate::{
     },
 };
 
-const MQTT_BASE_TOPIC: &str = "gpio2mqtt";
+use paho_mqtt::{QOS_0 as QOS_AT_MOST_ONCE, QOS_1 as QOS_AT_LEAST_ONCE, QOS_2 as QOS_EXACTLY_ONCE};
+
 const MQTT_DISCOVERY_TOPIC: &str = "homeassistant";
-const MQTT_AVAIL_TOPIC: &str = "gpio2mqtt/bridge/state";
 
-const QOS_AT_MOST_ONCE: i32 = paho_mqtt::QOS_0;
-const QOS_AT_LEAST_ONCE: i32 = paho_mqtt::QOS_1;
-const QOS_EXACTLY_ONCE: i32 = paho_mqtt::QOS_2;
+fn mqtt_avail_topic(client_id: &str) -> String {
+    format!("{client_id}/bridge/state")
+}
 
-pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayload]) -> anyhow::Result<()> {
+pub async fn register_devices(client: &AsyncClient, payloads: &[ConfigPayload]) -> anyhow::Result<()> {
     for payload in payloads {
         println!(
             "MQTT publish: topic '{}' payload '{}'",
@@ -36,7 +36,7 @@ pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayloa
         ))
         .await?;
 
-        if let DeviceSpecificMqttConfig::Cover { command_topic, .. } = &payload.specific {
+        if let DeviceSpecificConfig::Cover { command_topic, .. } = &payload.specific {
             client.subscribe(command_topic, QOS_AT_LEAST_ONCE).await?;
         }
     }
@@ -44,10 +44,10 @@ pub async fn register_devices(client: &AsyncClient, payloads: &[MqttConfigPayloa
     Ok(())
 }
 
-pub async fn announce_online(client: &AsyncClient) -> anyhow::Result<()> {
+pub async fn announce_online(client_id: &str, client: &AsyncClient) -> anyhow::Result<()> {
     client
         .publish(Message::new_retained(
-            MQTT_AVAIL_TOPIC,
+            mqtt_avail_topic(client_id),
             b"online".to_owned(),
             QOS_AT_LEAST_ONCE,
         ))
@@ -55,12 +55,12 @@ pub async fn announce_online(client: &AsyncClient) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn offline_message() -> Message {
-    Message::new_retained(MQTT_AVAIL_TOPIC, "offline".to_owned(), QOS_AT_LEAST_ONCE)
+pub fn offline_message(client_id: &str) -> Message {
+    Message::new_retained(mqtt_avail_topic(client_id), "offline".to_owned(), QOS_AT_LEAST_ONCE)
 }
 
-pub async fn announce_offline(client: &AsyncClient) -> anyhow::Result<()> {
-    client.publish(offline_message()).await?;
+pub async fn announce_offline(client_id: &str, client: &AsyncClient) -> anyhow::Result<()> {
+    client.publish(offline_message(client_id)).await?;
     Ok(())
 }
 
@@ -88,12 +88,12 @@ pub async fn publish_state<S: Into<String>>(
     Ok(())
 }
 
-pub fn command_topic_for_dev_id(dev_id: &config::Identifier) -> String {
-    format!("{MQTT_BASE_TOPIC}/{dev_id}/set", dev_id = dev_id.0)
+pub fn command_topic_for_dev_id(client_id: &str, dev_id: &config::Identifier) -> String {
+    format!("{client_id}/{dev_id}/set", dev_id = dev_id.0)
 }
 
-pub fn state_topic_for_dev_id(dev_id: &config::Identifier) -> String {
-    format!("{MQTT_BASE_TOPIC}/{dev_id}/state", dev_id = dev_id.0)
+pub fn state_topic_for_dev_id(client_id: &str, dev_id: &config::Identifier) -> String {
+    format!("{client_id}/{dev_id}/state", dev_id = dev_id.0)
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -201,7 +201,7 @@ impl From<Measurements> for SunspecState {
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(untagged)]
-pub enum DeviceSpecificMqttConfig {
+pub enum DeviceSpecificConfig {
     Cover {
         command_topic: String,
     },
@@ -219,7 +219,7 @@ pub enum DeviceSpecificMqttConfig {
 }
 
 #[derive(Serialize, Debug, Clone)]
-pub struct MqttConfigPayload {
+pub struct ConfigPayload {
     pub name: String,
     pub unique_id: String,
     pub availability: Vec<AvailabilityPayload>,
@@ -227,10 +227,10 @@ pub struct MqttConfigPayload {
     pub config_topic: String,
 
     #[serde(flatten)]
-    pub specific: DeviceSpecificMqttConfig,
+    pub specific: DeviceSpecificConfig,
 }
 
-impl MqttConfigPayload {
+impl ConfigPayload {
     fn format_sunspec_serial_number(serial_number: [u16; 10]) -> String {
         let mut s = String::new();
 
@@ -251,15 +251,15 @@ impl MqttConfigPayload {
         s
     }
 
-    pub fn from_cover_config(conf: config::CoverConfig) -> Self {
+    pub fn from_cover_config(client_id: &str, conf: config::CoverConfig) -> Self {
         let dev_id = conf.device.identifier;
-        let unique_id = format!("{MQTT_BASE_TOPIC}_{dev_id}", dev_id = dev_id.0);
+        let unique_id = format!("{client_id}_{dev_id}", dev_id = dev_id.0);
 
         Self {
             config_topic: format!("{MQTT_DISCOVERY_TOPIC}/cover/{unique_id}/config"),
             unique_id,
-            specific: DeviceSpecificMqttConfig::Cover { command_topic: command_topic_for_dev_id(&dev_id) },
-            availability: vec![AvailabilityPayload { topic: MQTT_AVAIL_TOPIC.to_string() }],
+            specific: DeviceSpecificConfig::Cover { command_topic: command_topic_for_dev_id(client_id, &dev_id) },
+            availability: vec![AvailabilityPayload { topic: mqtt_avail_topic(client_id) }],
             device: DevicePayload {
                 name: conf.name.clone(),
                 identifiers: vec![dev_id.0],
@@ -272,17 +272,18 @@ impl MqttConfigPayload {
     }
 
     pub fn from_sunspec(
+        client_id: &str,
         conf: config::SunspecConfig,
         specs: Option<&sunspec::varta::DeviceSpecifications>,
     ) -> Vec<Self> {
         let dev_id = conf.device.identifier;
 
-        let state_topic = state_topic_for_dev_id(&dev_id);
+        let state_topic = state_topic_for_dev_id(client_id, &dev_id);
 
         let sensors = vec![
             (
                 "state",
-                DeviceSpecificMqttConfig::Sensor {
+                DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: None,
                     state_class: StateClass::Measurement,
@@ -292,7 +293,7 @@ impl MqttConfigPayload {
             ),
             (
                 "battery_active_charge_power",
-                DeviceSpecificMqttConfig::Sensor {
+                DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
                     state_class: StateClass::Measurement,
@@ -302,7 +303,7 @@ impl MqttConfigPayload {
             ),
             (
                 "battery_active_discharge_power",
-                DeviceSpecificMqttConfig::Sensor {
+                DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
                     state_class: StateClass::Measurement,
@@ -312,7 +313,7 @@ impl MqttConfigPayload {
             ),
             (
                 "state_of_charge",
-                DeviceSpecificMqttConfig::Sensor {
+                DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Battery),
                     state_class: StateClass::Measurement,
@@ -322,7 +323,7 @@ impl MqttConfigPayload {
             ),
             (
                 "total_charge_energy",
-                DeviceSpecificMqttConfig::Sensor {
+                DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Energy),
                     state_class: StateClass::TotalIncreasing,
@@ -332,7 +333,7 @@ impl MqttConfigPayload {
             ),
             (
                 "grid_consumption_power",
-                DeviceSpecificMqttConfig::Sensor {
+                DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
                     state_class: StateClass::Measurement,
@@ -342,7 +343,7 @@ impl MqttConfigPayload {
             ),
             (
                 "grid_backfeed_power",
-                DeviceSpecificMqttConfig::Sensor {
+                DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
                     state_class: StateClass::Measurement,
@@ -352,7 +353,7 @@ impl MqttConfigPayload {
             ),
         ];
 
-        let unique_id = format!("{MQTT_BASE_TOPIC}_{dev_id}", dev_id = dev_id.0);
+        let unique_id = format!("{client_id}_{dev_id}", dev_id = dev_id.0);
 
         let mut identifiers = vec![dev_id.0];
 
@@ -367,10 +368,10 @@ impl MqttConfigPayload {
 
         sensors
             .into_iter()
-            .map(move |(sensor_name, sensor)| MqttConfigPayload {
+            .map(move |(sensor_name, sensor)| ConfigPayload {
                 config_topic: format!("{MQTT_DISCOVERY_TOPIC}/sensor/{unique_id}/{sensor_name}/config"),
                 unique_id: format!("{unique_id}_{sensor_name}"),
-                availability: vec![AvailabilityPayload { topic: MQTT_AVAIL_TOPIC.to_string() }],
+                availability: vec![AvailabilityPayload { topic: mqtt_avail_topic(client_id) }],
                 device: DevicePayload {
                     name: conf.name.clone(),
                     manufacturer: conf.device.manufacturer.clone(),

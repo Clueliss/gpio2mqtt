@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
                 .iter()
                 .map(|cover_conf| {
                     Ok((
-                        mqtt::command_topic_for_dev_id(&cover_conf.device.identifier),
+                        mqtt::command_topic_for_dev_id(&config.client_id, &cover_conf.device.identifier),
                         (
                             Duration::from_millis(cover_conf.device_gpio_pause_ms.unwrap_or_default()),
                             covers::stateless_gpio::Cover::from_chip_offsets(
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         .flatten()
         .map(|sunspec_conf| {
             Ok((
-                mqtt::state_topic_for_dev_id(&sunspec_conf.device.identifier),
+                mqtt::state_topic_for_dev_id(&config.client_id, &sunspec_conf.device.identifier),
                 (
                     Duration::from_millis(sunspec_conf.device_polling_delay_ms),
                     sunspec::varta::ElementSunspecClient::new(SocketAddr::new(
@@ -82,17 +82,24 @@ async fn main() -> Result<()> {
 
         for cover_group in config.covers.into_iter().flatten() {
             for cover_conf in cover_group.devices {
-                payloads.push(mqtt::MqttConfigPayload::from_cover_config(cover_conf));
+                payloads.push(mqtt::ConfigPayload::from_cover_config(&config.client_id, cover_conf));
             }
         }
 
         for sunspec_conf in config.sunspec.into_iter().flatten() {
             let (_, device) = sunspec_devices
-                .get_mut(&mqtt::state_topic_for_dev_id(&sunspec_conf.device.identifier))
+                .get_mut(&mqtt::state_topic_for_dev_id(
+                    &config.client_id,
+                    &sunspec_conf.device.identifier,
+                ))
                 .unwrap();
 
             let specs = device.specifications().await.ok();
-            payloads.extend(mqtt::MqttConfigPayload::from_sunspec(sunspec_conf, specs.as_ref()));
+            payloads.extend(mqtt::ConfigPayload::from_sunspec(
+                &config.client_id,
+                sunspec_conf,
+                specs.as_ref(),
+            ));
         }
 
         payloads
@@ -105,7 +112,7 @@ async fn main() -> Result<()> {
                 host = config.broker,
                 port = config.broker_port
             ))
-            .client_id(config.client_id)
+            .client_id(&config.client_id)
             .persistence(PersistenceType::None)
             .finalize(),
     )
@@ -118,13 +125,13 @@ async fn main() -> Result<()> {
             ConnectOptionsBuilder::new()
                 .automatic_reconnect(Duration::from_secs(2u64.pow(3)), Duration::from_secs(2u64.pow(12)))
                 .max_inflight(128)
-                .will_message(mqtt::offline_message())
+                .will_message(mqtt::offline_message(&config.client_id))
                 .finalize(),
         )
         .await
         .context("Failed to connect to MQTT broker")?;
 
-    mqtt::announce_online(&mqtt_client)
+    mqtt::announce_online(&config.client_id, &mqtt_client)
         .await
         .context("Failed to announce online status")?;
 
@@ -184,7 +191,7 @@ async fn main() -> Result<()> {
     loop {
         select! {
             _ = tokio::signal::ctrl_c() => {
-                let _ = mqtt::announce_offline(&mqtt_client).await;
+                let _ = mqtt::announce_offline(&config.client_id, &mqtt_client).await;
                 break Ok(());
             },
             event = rx.recv() => match event.unwrap() {
