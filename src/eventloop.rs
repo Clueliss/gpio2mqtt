@@ -28,7 +28,29 @@ impl Pause {
 
 pub enum Message {
     SunspecMeasurement(String, sunspec::varta::Measurements),
-    MqttEvent(Option<paho_mqtt::Message>),
+    MqttEvent(paho_mqtt::Message),
+}
+
+pub fn mqtt_message_event_loop(
+    mqtt_stream: paho_mqtt::AsyncReceiver<Option<paho_mqtt::Message>>,
+    tx: mpsc::Sender<Message>,
+) -> impl Future<Output = ()> {
+    async move {
+        loop {
+            let Ok(event) = mqtt_stream.recv().await else {
+                break;
+            };
+
+            match event {
+                Some(event) => if let Err(_) = tx.send(Message::MqttEvent(event)).await {
+                    break;
+                },
+                None => println!("Lost connection to server"),
+            }
+        }
+
+        println!("Shutting down MQTT client");
+    }
 }
 
 pub fn stateless_cover_event_loop(

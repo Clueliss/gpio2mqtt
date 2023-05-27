@@ -4,7 +4,7 @@ mod eventloop;
 mod mqtt;
 mod sunspec;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, PersistenceType};
 use std::{collections::HashMap, fs::File, net::SocketAddr, sync::Arc};
 use tokio::{
@@ -167,26 +167,7 @@ async fn main() -> Result<()> {
         cover_channels
     };
 
-    {
-        let tx = tx;
-        tokio::spawn(async move {
-            loop {
-                let Ok(event) = mqtt_stream.recv().await else {
-                    break;
-                };
-
-                let event_was_none = event.is_none();
-                if let Err(_) = tx.send(eventloop::Message::MqttEvent(event)).await {
-                    break;
-                }
-                if event_was_none {
-                    break;
-                }
-            }
-
-            println!("Shutting down MQTT client");
-        });
-    }
+    tokio::spawn(eventloop::mqtt_message_event_loop(mqtt_stream, tx));
 
     loop {
         select! {
@@ -200,7 +181,7 @@ async fn main() -> Result<()> {
                         .await
                         .context("Unable to publish state")?;
                 },
-                eventloop::Message::MqttEvent(Some(msg)) => {
+                eventloop::Message::MqttEvent(msg) => {
                     let payload = match std::str::from_utf8(msg.payload()) {
                         Ok(payload) => payload,
                         Err(e) => {
@@ -225,9 +206,6 @@ async fn main() -> Result<()> {
                     };
 
                     chan.send(cmd).unwrap();
-                },
-                eventloop::Message::MqttEvent(None) => {
-                    break Err(anyhow!("Lost connection to server"));
                 },
             }
         }
