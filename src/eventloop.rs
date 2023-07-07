@@ -42,8 +42,10 @@ pub fn mqtt_message_event_loop(
             };
 
             match event {
-                Some(event) => if let Err(_) = tx.send(Message::MqttEvent(event)).await {
-                    break;
+                Some(event) => {
+                    if let Err(_) = tx.send(Message::MqttEvent(event)).await {
+                        break;
+                    }
                 },
                 None => println!("Lost connection to server"),
             }

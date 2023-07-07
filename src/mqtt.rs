@@ -10,6 +10,7 @@ use crate::{
     },
 };
 
+#[allow(unused_imports)]
 use paho_mqtt::{QOS_0 as QOS_AT_MOST_ONCE, QOS_1 as QOS_AT_LEAST_ONCE, QOS_2 as QOS_EXACTLY_ONCE};
 
 const MQTT_DISCOVERY_TOPIC: &str = "homeassistant";
@@ -113,6 +114,7 @@ pub struct DevicePayload {
     sw_version: Option<String>,
 }
 
+#[allow(unused)]
 #[derive(Serialize, Debug, Copy, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum StateClass {
@@ -121,6 +123,7 @@ pub enum StateClass {
     TotalIncreasing,
 }
 
+#[allow(unused)]
 #[derive(Serialize, Debug, Copy, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceClass {
@@ -219,8 +222,9 @@ pub enum DeviceSpecificConfig {
     },
     Sensor {
         state_topic: String,
-        state_class: StateClass,
 
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state_class: Option<StateClass>,
         #[serde(skip_serializing_if = "Option::is_none")]
         unit_of_measurement: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -298,7 +302,7 @@ impl ConfigPayload {
                 DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Enum),
-                    state_class: StateClass::Measurement,
+                    state_class: None,
                     unit_of_measurement: None,
                     value_template: Some("{{ value_json.state }}".to_owned()),
                 },
@@ -308,7 +312,7 @@ impl ConfigPayload {
                 DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
-                    state_class: StateClass::Measurement,
+                    state_class: Some(StateClass::Measurement),
                     unit_of_measurement: Some("W".to_owned()),
                     value_template: Some("{{ value_json.battery_active_charge_power }}".to_owned()),
                 },
@@ -318,7 +322,7 @@ impl ConfigPayload {
                 DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
-                    state_class: StateClass::Measurement,
+                    state_class: Some(StateClass::Measurement),
                     unit_of_measurement: Some("W".to_owned()),
                     value_template: Some("{{ value_json.battery_active_discharge_power }}".to_owned()),
                 },
@@ -328,7 +332,7 @@ impl ConfigPayload {
                 DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Battery),
-                    state_class: StateClass::Measurement,
+                    state_class: Some(StateClass::Measurement),
                     unit_of_measurement: Some("%".to_owned()),
                     value_template: Some("{{ value_json.state_of_charge }}".to_owned()),
                 },
@@ -338,7 +342,7 @@ impl ConfigPayload {
                 DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Energy),
-                    state_class: StateClass::TotalIncreasing,
+                    state_class: Some(StateClass::TotalIncreasing),
                     unit_of_measurement: Some("Wh".to_owned()),
                     value_template: Some("{{ value_json.total_charge_energy }}".to_owned()),
                 },
@@ -348,7 +352,7 @@ impl ConfigPayload {
                 DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
-                    state_class: StateClass::Measurement,
+                    state_class: Some(StateClass::Measurement),
                     unit_of_measurement: Some("W".to_owned()),
                     value_template: Some("{{ value_json.grid_consumption_power }}".to_owned()),
                 },
@@ -358,7 +362,7 @@ impl ConfigPayload {
                 DeviceSpecificConfig::Sensor {
                     state_topic: state_topic.clone(),
                     device_class: Some(DeviceClass::Power),
-                    state_class: StateClass::Measurement,
+                    state_class: Some(StateClass::Measurement),
                     unit_of_measurement: Some("W".to_owned()),
                     value_template: Some("{{ value_json.grid_backfeed_power }}".to_owned()),
                 },
