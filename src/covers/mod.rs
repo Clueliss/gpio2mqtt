@@ -1,6 +1,9 @@
 pub mod stateless_gpio;
 
-use std::str::FromStr;
+use std::{
+    fmt::{Display, Formatter},
+    str::FromStr,
+};
 use thiserror::Error;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -27,12 +30,12 @@ impl FromStr for CoverCommand {
     }
 }
 
-impl ToString for CoverCommand {
-    fn to_string(&self) -> String {
+impl Display for CoverCommand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            CoverCommand::Open => "OPEN".to_owned(),
-            CoverCommand::Close => "CLOSE".to_owned(),
-            CoverCommand::Stop => "STOP".to_owned(),
+            CoverCommand::Open => write!(f, "OPEN"),
+            CoverCommand::Close => write!(f, "CLOSE"),
+            CoverCommand::Stop => write!(f, "STOP"),
         }
     }
 }

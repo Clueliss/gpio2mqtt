@@ -6,16 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-gpio-cdev = "0.5.1"
-serde = { version = "^1.0.133", features = ["derive"] }
-serde_json = "1.0.74"
-serde_yaml = "0.9.14"
-tokio = { version = "1.15.0", features = ["macros", "time", "rt", "signal"] }
-tokio-util = "0.7.4"
-regex = "1.5.4"
-lazy_static = "1.4.0"
-modbus = { git = "https://github.com/Clueliss/modbus", rev = "142928f" }
-chrono = "0.4.22"
-anyhow = "1.0.66"
-thiserror = "1.0.37"
-paho-mqtt = { version = "0.11.1", default-features = false, features = ["bundled"] }
+anyhow = "^1"
+gpio-cdev = "^0.6"
+modbus = { git = "https://github.com/Clueliss/modbus", rev = "b99b4c1" }
+paho-mqtt = { version = "^0.12", default-features = false, features = ["bundled"] }
+regex = "^1"
+serde = { version = "^1", features = ["derive"] }
+serde_json = "^1"
+serde_yaml = "^0.9"
+thiserror = "^1"
+tokio = { version = "^1", features = ["macros", "time", "rt", "signal", "sync"] }

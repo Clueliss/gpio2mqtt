@@ -10,6 +10,7 @@ use crate::{
     },
 };
 
+use crate::sunspec::VoltAmps;
 #[allow(unused_imports)]
 use paho_mqtt::{QOS_0 as QOS_AT_MOST_ONCE, QOS_1 as QOS_AT_LEAST_ONCE, QOS_2 as QOS_EXACTLY_ONCE};
 
@@ -184,6 +185,8 @@ pub struct SunspecState {
     total_charge_energy: WattHours,
     battery_active_charge_power: Watts,
     battery_active_discharge_power: Watts,
+    battery_apparent_charge_power: VoltAmps,
+    battery_apparent_discharge_power: VoltAmps,
     grid_backfeed_power: Watts,
     grid_consumption_power: Watts,
 }
@@ -200,6 +203,14 @@ impl From<Measurements> for SunspecState {
             },
             battery_active_discharge_power: match value.active_battery_power {
                 Some(BatteryPower::Discharge(w)) => w,
+                _ => 0,
+            },
+            battery_apparent_charge_power: match value.apparent_battery_power {
+                Some(BatteryPower::Charge(va)) => va,
+                _ => 0,
+            },
+            battery_apparent_discharge_power: match value.apparent_battery_power {
+                Some(BatteryPower::Discharge(va)) => va,
                 _ => 0,
             },
             grid_backfeed_power: match value.grid_power {

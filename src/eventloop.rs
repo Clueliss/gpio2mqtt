@@ -31,28 +31,26 @@ pub enum Message {
     MqttEvent(paho_mqtt::Message),
 }
 
-pub fn mqtt_message_event_loop(
+pub async fn mqtt_message_event_loop(
     mqtt_stream: paho_mqtt::AsyncReceiver<Option<paho_mqtt::Message>>,
     tx: mpsc::Sender<Message>,
-) -> impl Future<Output = ()> {
-    async move {
-        loop {
-            let Ok(event) = mqtt_stream.recv().await else {
-                break;
-            };
+) {
+    loop {
+        let Ok(event) = mqtt_stream.recv().await else {
+            break;
+        };
 
-            match event {
-                Some(event) => {
-                    if let Err(_) = tx.send(Message::MqttEvent(event)).await {
-                        break;
-                    }
-                },
-                None => println!("Lost connection to server"),
-            }
+        match event {
+            Some(event) => {
+                if tx.send(Message::MqttEvent(event)).await.is_err() {
+                    break;
+                }
+            },
+            None => println!("Lost connection to server"),
         }
-
-        println!("Shutting down MQTT client");
     }
+
+    println!("Shutting down MQTT client");
 }
 
 pub fn stateless_cover_event_loop(
@@ -64,7 +62,7 @@ pub fn stateless_cover_event_loop(
     let (tx, mut rx) = watch::channel(covers::CoverCommand::Stop);
 
     let fut = async move {
-        while let Ok(_) = rx.changed().await {
+        while rx.changed().await.is_ok() {
             let mut gtt = group_gpio_pause.lock().await;
             gtt.pause().await;
 
@@ -103,7 +101,11 @@ pub fn sunspec_event_loop(
                 Ok(Ok(measurement)) => {
                     last_measurement = Some(measurement);
 
-                    if let Err(_) = tx.send(Message::SunspecMeasurement(topic.clone(), measurement)).await {
+                    if tx
+                        .send(Message::SunspecMeasurement(topic.clone(), measurement))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 },
@@ -119,7 +121,11 @@ pub fn sunspec_event_loop(
                             ..last_measurement
                         };
 
-                        if let Err(_) = tx.send(Message::SunspecMeasurement(topic.clone(), placeholder)).await {
+                        if tx
+                            .send(Message::SunspecMeasurement(topic.clone(), placeholder))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }

@@ -1,10 +1,8 @@
-use lazy_static::lazy_static;
+use regex::Regex;
 use serde::{de::Error, Deserialize, Deserializer, Serialize};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::OnceLock};
 
-lazy_static! {
-    static ref IDENTIFIER_REGEX: regex::Regex = regex::Regex::new("[a-zA-Z0-9_]+").unwrap();
-}
+static IDENTIFIER_REGEX: OnceLock<Regex> = OnceLock::new();
 
 const fn default_mqtt_port() -> u16 {
     1883
@@ -46,9 +44,11 @@ impl<'de> Deserialize<'de> for Identifier {
     where
         D: Deserializer<'de>,
     {
+        let identifier_regex = IDENTIFIER_REGEX.get_or_init(|| Regex::new("[a-zA-Z0-9_]+").unwrap());
+
         let id = String::deserialize(de)?;
 
-        if IDENTIFIER_REGEX.is_match(&id) {
+        if identifier_regex.is_match(&id) {
             Ok(Identifier(id))
         } else {
             Err(Error::custom("identifier must match [a-zA-Z0-9_]+"))
